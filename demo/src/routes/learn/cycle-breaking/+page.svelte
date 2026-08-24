@@ -662,6 +662,7 @@
 	}
 
 	.arcs {
+		user-select: none;
 		width: 100%;
 		max-width: 40rem;
 		display: block;

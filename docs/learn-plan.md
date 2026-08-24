@@ -43,8 +43,51 @@ claim is demonstrated, not illustrated. Each topic ends with a playground.
    and per-layer real+dummy occupancy (the terminal renderer hid all
    three); (8) takeaways, next = crossing minimization. Ref cards:
    Gansner et al. 1993 (network simplex), Coffman & Graham 1972.
-3. Crossing minimization — layer sweep, barycenter, why spaghetti is dummies.
-4. Node placement — Brandes-Köpf vs linear segments, the width/symmetry trade.
+   Figure language on this page: every layer's occupants — real nodes AND
+   dummies — sit in evenly spaced slot columns (dummies = dot inside a
+   dashed pill-sized slot), per-band `real+dummy` counts on the right,
+   edges straight between slots. The playground keeps ELK's layers and
+   left-to-right order but re-places x on the same grid.
+3. Crossing minimization — in progress. Outline: (1) lede — layers are
+   fixed, the only freedom left is the order within each layer, and
+   crossings are the readability cost that order decides; dummies are in
+   the game (a long edge is ordered in every layer it crosses); (2) counting
+   crossings: two edges between the same layer pair cross iff their
+   endpoints' orders disagree; NP-hard already for two layers with one side
+   fixed; (3) centerpiece widget — drag nodes AND dummy slots sideways
+   within a 3-layer graph, live crossing count (minimum brute-forced),
+   plus [sweep down]/[sweep up] buttons that run one barycenter pass and
+   badge each reordered node with its barycenter; (4) the layer sweep —
+   fix one layer, sort the next by barycenter (or median), alternate
+   direction until nothing changes; transpose/greedy-switch polish; (5)
+   long edges: where the tangle comes from — a long edge's dummies get
+   sorted like nodes, so a bad order weaves it through the drawing; (6) playground — shared
+   ElkGrid component (layering playground's renderer moved to
+   $lib/learn), crossing-minimization strategy select (LAYER_SWEEP / NONE
+   = declaration order) and thoroughness, crossings counted on the grid;
+   (7) "Beyond the sweep" — sifting, global sifting (rigid dummy chains),
+   exact ILP; what ships and why; the objective matters more than the
+   solver; (8) takeaways, next = node placement. Ref cards: Sugiyama,
+   Tagawa & Toda 1981, Eades & Wormald 1994, Matuszewski et al. 1999,
+   Bachmaier et al. 2011, Jünger & Mutzel 1997.
+4. Node placement — in progress. Outline: (1) lede — layers and orders
+   are fixed; now x coordinates, the first geometric decision; the rules
+   (keep the order, keep a minimum gap) and the wishes (straight long
+   edges, parents centred over children, short edges, narrow drawing) that
+   can't all be had; (2) centerpiece widget — drag nodes continuously
+   sideways (order and gap enforced), live width / long-edge kinks / total
+   horizontal edge length; buttons [pack left] (narrowest), [balance]
+   (priority method: nodes move toward the mean of their neighbours,
+   dummies first), [straight long edges] (dummy chains rigid, Sander-style
+   linear segments); (3) the methods — priority method (Sugiyama), linear
+   segments (Sander), Brandes–Köpf (four median alignments averaged,
+   linear time, the common default), network simplex on x (dot, with edge
+   weights that buy straightness); the width-vs-straightness trade stated
+   plainly, with the corpus finding that LINEAR_SEGMENTS came out narrower
+   than BK; (4) static pair: pack-left vs straightened on the widget graph;
+   (5) playground — ElkGrid in grid=false mode (ELK's real x), placement
+   strategy select, stats add width and long-edge kinks; (6) takeaways,
+   next = edge routing. Ref cards: Brandes & Köpf 2002, Sander 1996.
 5. Edge routing — channels, tracks, orthogonal vs polyline.
 6. Compound graphs — INCLUDE_CHILDREN, piercing, cluster inflation.
 7. The terminal grid — snapping, even widths, junction merging, labels.
@@ -74,6 +117,12 @@ sentence of definition first ("The badge on each node is the one number
 that strategy looked at"), and after that the same word is used
 consistently. When a standard term exists (source, reversal, declaration
 order), use it instead of a metaphor.
+
+Reading order: humans read linearly — a sentence must make sense with
+only what came before it. No front-loaded clause pileups ("X, highest
+priority first — and dummies get the highest priority of all, so...");
+name the thing, then unfold it step by step, one idea per sentence.
+Split multi-method paragraphs: one method, one paragraph.
 
 Voice: first-person plural ("we assign", "we've measured") — the author
 walks with the reader. Don't overuse "let's"-style section openers; at

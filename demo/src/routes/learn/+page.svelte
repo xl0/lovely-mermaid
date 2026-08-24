@@ -17,8 +17,16 @@
 			title: 'Layering',
 			blurb: 'rows, dummy nodes, and the hidden cost of long edges'
 		},
-		{ slug: null, title: 'Crossing minimization', blurb: 'ordering nodes within each layer' },
-		{ slug: null, title: 'Node placement', blurb: 'the width-vs-symmetry trade' },
+		{
+			slug: 'crossing-minimization',
+			title: 'Crossing minimization',
+			blurb: 'ordering nodes within each layer'
+		},
+		{
+			slug: 'node-placement',
+			title: 'Node placement',
+			blurb: 'turning orders into coordinates; the width-vs-straightness trade'
+		},
 		{ slug: null, title: 'Edge routing', blurb: 'channels, tracks, and orthogonal lines' },
 		{ slug: null, title: 'Compound graphs', blurb: 'nested boxes, border-crossing edges' },
 		{ slug: null, title: 'The terminal grid', blurb: 'from float coordinates to character cells' }

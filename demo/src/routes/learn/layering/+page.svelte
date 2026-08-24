@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { base } from '$app/paths';
+	import ElkGrid from '$lib/learn/ElkGrid.svelte';
+	import { edgePts, slotted, type Fig } from '$lib/learn/slots';
 	import Term from '$lib/learn/Term.svelte';
 
 	// ---- the layer-juggling widget -----------------------------------------
@@ -19,6 +21,25 @@
 		['f', 'e']
 	];
 	const NLAYERS = 5;
+	const FIGW: Fig = { nodes: LN, edges: LE, col: LX, pw: 40, vw: 460, pitch: 70, x0: 40 };
+	// The subgraph section's flat variant of the fetch/clean/merge graph.
+	const FLAT: Fig = {
+		nodes: ['fetch', 'clean', 'merge', 'stats', 'log', 'ship'],
+		edges: [
+			['fetch', 'clean'],
+			['clean', 'merge'],
+			['merge', 'stats'],
+			['fetch', 'log'],
+			['log', 'ship'],
+			['stats', 'ship']
+		],
+		col: { fetch: 150, clean: 120, merge: 120, stats: 120, log: 220, ship: 150 },
+		pw: 60,
+		vw: 300,
+		pitch: 80,
+		x0: 50
+	};
+	const FLAT_RK: Record<string, number> = { fetch: 0, clean: 1, merge: 2, log: 2, stats: 3, ship: 4 };
 	const START: Record<string, number> = { a: 0, b: 0, c: 1, d: 2, e: 4, f: 2 };
 	const MIN_SPAN: Record<string, number> = { a: 0, b: 0, c: 1, d: 2, e: 3, f: 1 };
 	const LONGEST_PATH: Record<string, number> = { a: 0, b: 0, c: 1, d: 2, e: 3, f: 2 };
@@ -32,32 +53,7 @@
 	const nBad = $derived(LE.filter((e) => spanOf(e) < 1).length);
 	const totSpan = $derived(LE.reduce((s, e) => s + spanOf(e), 0));
 	const nDummy = $derived(LE.reduce((s, e) => s + Math.max(0, spanOf(e) - 1), 0));
-	// Shorten an edge so the arrowhead stops at the node circle.
-	const ledge = ([u, v]: [string, string]) => {
-		const x1 = LX[u];
-		const y1 = yOf(u);
-		const x2 = LX[v];
-		const y2 = yOf(v);
-		const dx = x2 - x1;
-		const dy = y2 - y1;
-		const len = Math.hypot(dx, dy) || 1;
-		return {
-			x1: x1 + (dx * 18) / len,
-			y1: y1 + (dy * 18) / len,
-			x2: x2 - (dx * 24) / len,
-			y2: y2 - (dy * 24) / len
-		};
-	};
-	// Dummy dots: where a long edge crosses each intermediate layer band.
-	const dots = ([u, v]: [string, string]): { x: number; y: number }[] => {
-		if (spanOf([u, v]) < 2) return [];
-		const out = [];
-		for (let r = layers[u] + 1; r < layers[v]; r++) {
-			const t = (BY(r) - yOf(u)) / (yOf(v) - yOf(u) || 1);
-			out.push({ x: LX[u] + (LX[v] - LX[u]) * t, y: yOf(u) + (yOf(v) - yOf(u)) * t });
-		}
-		return out;
-	};
+	const slot = $derived(slotted(LN, LE, LX, layers, 70, 40));
 	const ARENA_H = 340;
 	function svgY(e: PointerEvent): number {
 		if (!laySvg) return 0;
@@ -78,12 +74,7 @@
 		dragL = null;
 	}
 
-	// ---- playground -------------------------------------------------------
-	// Runs elkjs directly and draws the result in this page's own language:
-	// layer bands, dummy dots, per-layer occupancy. Layers are recovered by
-	// clustering node centers by y (uniform node heights make them exact);
-	// dummy positions by intersecting each routed edge with the skipped
-	// bands' centerlines.
+	// ---- playground (ElkGrid does the drawing) ------------------------------
 	const PIPE = `src[source] --> lex
 lex --> parse
 parse --> types[typecheck]
@@ -100,191 +91,38 @@ lint --> pack`;
 	let playSrc = $state(PIPE);
 	let playLay = $state('NETWORK_SIMPLEX');
 
-	function parseEdges(src: string): { labels: Map<string, string>; edges: [string, string][] } {
-		const labels = new Map<string, string>();
-		const edges: [string, string][] = [];
-		const id = (tok: string): string | null => {
-			const m = tok.trim().match(/^(\w+)(?:\[([^\]]*)\])?$/);
-			if (!m) return null;
-			if (m[2] || !labels.has(m[1])) labels.set(m[1], m[2] ?? m[1]);
-			return m[1];
-		};
-		for (const line of src.split('\n')) {
-			const t = line.trim();
-			if (!t || /^graph\b/i.test(t)) continue;
-			const parts = t.split('-->');
-			for (let i = 0; i + 1 < parts.length; i++) {
-				const u = id(parts[i]);
-				const v = id(parts[i + 1]);
-				if (u && v) edges.push([u, v]);
-			}
-		}
-		return { labels, edges };
-	}
-
-	interface PNode {
-		id: string;
-		label: string;
-		x: number;
-		y: number;
-		w: number;
-		h: number;
-	}
-	interface PEdge {
-		pts: { x: number; y: number }[];
-		up: boolean;
-		dots: { x: number; y: number }[];
-	}
-	interface PFig {
-		w: number;
-		h: number;
-		nodes: PNode[];
-		edges: PEdge[];
-		bands: { y: number; real: number; dummy: number }[];
-		span: number;
-		dummies: number;
-	}
-	let pfig = $state<PFig | null>(null);
-	let perr = $state('');
-	let runToken = 0;
-
-	// x where a polyline crosses the horizontal line at y.
-	const xAtY = (pts: { x: number; y: number }[], y: number): number | null => {
-		for (let i = 0; i + 1 < pts.length; i++) {
-			const a = pts[i];
-			const b = pts[i + 1];
-			if (a.y !== b.y && (a.y - y) * (b.y - y) <= 0)
-				return a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x);
-		}
-		return null;
-	};
-
-	$effect(() => {
-		const { labels, edges } = parseEdges(playSrc);
-		const strat = playLay;
-		const token = ++runToken;
-		(async () => {
-			const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
-			const laid = (await new ELK().layout({
-				id: 'root',
-				layoutOptions: {
-					'elk.algorithm': 'layered',
-					'elk.direction': 'DOWN',
-					'elk.layered.layering.strategy': strat,
-					'elk.spacing.nodeNode': '25',
-					'elk.layered.spacing.nodeNodeBetweenLayers': '45'
-				},
-				children: [...labels.entries()].map(([id, label]) => ({
-					id,
-					width: label.length * 7.2 + 20,
-					height: 26
-				})),
-				edges: edges.map(([u, v], i) => ({ id: `e${i}`, sources: [u], targets: [v] }))
-			})) as {
-				width?: number;
-				height?: number;
-				children?: { id: string; x?: number; y?: number; width?: number; height?: number }[];
-				edges?: {
-					sources: string[];
-					targets: string[];
-					sections?: {
-						startPoint: { x: number; y: number };
-						bendPoints?: { x: number; y: number }[];
-						endPoint: { x: number; y: number };
-					}[];
-				}[];
-			};
-			if (token !== runToken) return;
-			const nodes: PNode[] = (laid.children ?? []).map((c) => ({
-				id: c.id,
-				label: labels.get(c.id) ?? c.id,
-				x: (c.x ?? 0) + (c.width ?? 0) / 2,
-				y: (c.y ?? 0) + (c.height ?? 0) / 2,
-				w: c.width ?? 40,
-				h: c.height ?? 26
-			}));
-			// Uniform node heights -> nodes of one layer share an exact center y.
-			const ys = [...new Set(nodes.map((n) => Math.round(n.y)))].sort((a, b) => a - b);
-			const layerOf = (n: PNode) => ys.findIndex((y) => Math.abs(y - n.y) < 2);
-			const byId = new Map(nodes.map((n) => [n.id, n]));
-			const bands = ys.map((y) => ({ y, real: 0, dummy: 0 }));
-			for (const n of nodes) bands[layerOf(n)].real++;
-			const figEdges: PEdge[] = [];
-			let span = 0;
-			let dummies = 0;
-			for (const e of laid.edges ?? []) {
-				const a = byId.get(e.sources[0]);
-				const b = byId.get(e.targets[0]);
-				if (!a || !b) continue;
-				const sec = e.sections?.[0];
-				const pts = sec
-					? [sec.startPoint, ...(sec.bendPoints ?? []), sec.endPoint]
-					: [
-							{ x: a.x, y: a.y },
-							{ x: b.x, y: b.y }
-						];
-				const la = layerOf(a);
-				const lb = layerOf(b);
-				const d = Math.abs(lb - la);
-				span += d;
-				dummies += Math.max(0, d - 1);
-				const dots: { x: number; y: number }[] = [];
-				for (let i = Math.min(la, lb) + 1; i < Math.max(la, lb); i++) {
-					bands[i].dummy++;
-					const x = xAtY(pts, ys[i]);
-					if (x !== null) dots.push({ x, y: ys[i] });
-				}
-				figEdges.push({ pts, up: lb < la, dots });
-			}
-			pfig = {
-				w: laid.width ?? 100,
-				h: laid.height ?? 100,
-				nodes,
-				edges: figEdges,
-				bands,
-				span,
-				dummies
-			};
-			perr = '';
-		})().catch((err) => {
-			if (token === runToken) perr = String(err);
-		});
-	});
+	const lay = (v: string) => ({ 'elk.layered.layering.strategy': v });
 </script>
 
 <svelte:head>
 	<title>learn — layering</title>
 </svelte:head>
 
-{#snippet layfig(rk: Record<string, number>)}
-	{@const H = 40 + 65 * (Math.max(...Object.values(rk)) + 1) - 25}
-	<svg viewBox="0 0 460 {H}" class="figsvg" role="img" aria-label="Layering result">
-		{#each Array.from({ length: Math.max(...Object.values(rk)) + 1 }) as _, r}
-			<rect x="4" y={BY(r) - 20} width="452" height="40" class="band" />
-			<text x="8" y={BY(r) - 6} class="bandlabel">layer {r}</text>
+{#snippet layfig(f: Fig, rk: Record<string, number>)}
+	{@const s = slotted(f.nodes, f.edges, f.col, rk, f.pitch, f.x0)}
+	{@const H = 40 + 65 * s.occ.length - 25}
+	<svg viewBox="0 0 {f.vw} {H}" class="figsvg" role="img" aria-label="Layering result">
+		{#each s.occ as o, r}
+			<rect x="4" y={BY(r) - 21} width={f.vw - 8} height="42" class="band" />
+			<text x="8" y={BY(r) - 7} class="bandlabel">layer {r}</text>
+			<text x={f.vw - 36} y={BY(r) + 4} class="occ">{o.real}+{o.dummy}</text>
 		{/each}
-		{#each LE as e}
-			{@const x1 = LX[e[0]]}
-			{@const y1 = BY(rk[e[0]])}
-			{@const x2 = LX[e[1]]}
-			{@const y2 = BY(rk[e[1]])}
-			{@const len = Math.hypot(x2 - x1, y2 - y1) || 1}
-			<line
-				x1={x1 + ((x2 - x1) * 16) / len}
-				y1={y1 + ((y2 - y1) * 16) / len}
-				x2={x2 - ((x2 - x1) * 22) / len}
-				y2={y2 - ((y2 - y1) * 22) / len}
+		{#each f.edges as [u, v]}
+			<polyline
+				points={edgePts(u, v, s, (n) => BY(rk[n]), BY)
+					.map((p) => `${p.x},${p.y}`)
+					.join(' ')}
 				class="edge"
 				marker-end="url(#arr)"
 			/>
-			{#each Array.from({ length: Math.max(0, rk[e[1]] - rk[e[0]] - 1) }) as _, i}
-				{@const t = (BY(rk[e[0]] + 1 + i) - y1) / (y2 - y1)}
-				<circle cx={x1 + (x2 - x1) * t} cy={y1 + (y2 - y1) * t} r="4" class="dummy" />
-			{/each}
 		{/each}
-		{#each LN as n}
-			<circle cx={LX[n]} cy={BY(rk[n])} r="13" class="pill" />
-			<text x={LX[n]} y={BY(rk[n]) + 4}>{n}</text>
+		{#each s.dummies as d}
+			<rect x={d.x - 14} y={BY(d.layer) - 12} width="28" height="24" rx="10" class="slot" />
+			<circle cx={d.x} cy={BY(d.layer)} r="4" class="dummy" />
+		{/each}
+		{#each f.nodes as n}
+			<rect x={s.x[n] - f.pw / 2} y={BY(rk[n]) - 12} width={f.pw} height="24" rx="10" class="pill" />
+			<text x={s.x[n]} y={BY(rk[n]) + 4}>{n}</text>
 		{/each}
 	</svg>
 {/snippet}
@@ -339,8 +177,9 @@ lint --> pack`;
 	<h2>Try it</h2>
 	<p>
 		Seven edges, five rows to play with. Drag nodes between rows — red edges point the wrong
-		way and must be fixed first. The dots are the dummy nodes; watch them appear the moment an
-		edge skips a row. The starting position is valid but wasteful: total span 11. The minimum
+		way and must be fixed first. The dots are the dummy nodes, each drawn with the slot it takes;
+		watch them appear the moment an edge skips a row, and the row's count on the right
+		go up. The starting position is valid but wasteful: total span 11. The minimum
 		is 8 — find it.
 	</p>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -360,23 +199,23 @@ lint --> pack`;
 			</marker>
 		</defs>
 		{#each Array.from({ length: NLAYERS }) as _, r}
-			<rect x="4" y={BY(r) - 22} width="452" height="44" class="band" />
-			<text x="8" y={BY(r) - 8} class="bandlabel">layer {r}</text>
+			<rect x="4" y={BY(r) - 21} width="452" height="42" class="band" />
+			<text x="8" y={BY(r) - 7} class="bandlabel">layer {r}</text>
+			<text x="424" y={BY(r) + 4} class="occ">{slot.occ[r]?.real ?? 0}+{slot.occ[r]?.dummy ?? 0}</text>
 		{/each}
 		{#each LE as e}
-			{@const l = ledge(e)}
-			<line
-				x1={l.x1}
-				y1={l.y1}
-				x2={l.x2}
-				y2={l.y2}
+			<polyline
+				points={edgePts(e[0], e[1], slot, yOf, BY)
+					.map((p) => `${p.x},${p.y}`)
+					.join(' ')}
 				class="edge"
 				class:up={spanOf(e) < 1}
 				marker-end={spanOf(e) < 1 ? 'url(#arr-up)' : 'url(#arr)'}
 			/>
-			{#each dots(e) as d}
-				<circle cx={d.x} cy={d.y} r="4" class="dummy" />
-			{/each}
+		{/each}
+		{#each slot.dummies as d}
+			<rect x={d.x - 14} y={BY(d.layer) - 12} width="28" height="24" rx="10" class="slot" />
+			<circle cx={d.x} cy={BY(d.layer)} r="4" class="dummy" />
 		{/each}
 		{#each LN as n}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -388,8 +227,8 @@ lint --> pack`;
 				onpointerup={drop}
 				onpointercancel={drop}
 			>
-				<circle cx={LX[n]} cy={yOf(n)} r="15" class="pill" />
-				<text x={LX[n]} y={yOf(n) + 5}>{n}</text>
+				<rect x={slot.x[n] - 20} y={yOf(n) - 12} width="40" height="24" rx="10" class="pill" />
+				<text x={slot.x[n]} y={yOf(n) + 4}>{n}</text>
 			</g>
 		{/each}
 	</svg>
@@ -417,7 +256,7 @@ lint --> pack`;
 	</p>
 	<div class="row">
 		<figure>
-			{@render layfig(LONGEST_PATH)}
+			{@render layfig(FIGW, LONGEST_PATH)}
 			<figcaption>
 				<b>Longest path</b>: layer = the longest chain of edges below the node. One graph
 				traversal, minimal height, and zero regard for span — <code>f</code> lands next to
@@ -425,7 +264,7 @@ lint --> pack`;
 			</figcaption>
 		</figure>
 		<figure>
-			{@render layfig(MIN_SPAN)}
+			{@render layfig(FIGW, MIN_SPAN)}
 			<figcaption>
 				<b>Minimum span</b> (network simplex): solve for the layering with the smallest
 				total span — span 8, one dummy. Same height here, but earned rather than stumbled
@@ -464,32 +303,7 @@ lint --> pack`;
 	</p>
 	<div class="row">
 		<figure>
-			<svg viewBox="0 0 300 300" class="figsvg" role="img" aria-label="Flat layering">
-				{#each [30, 90, 150, 210, 270] as y, i}
-					<rect x="4" y={y - 20} width="292" height="40" class="band" />
-					<text x="8" y={y - 6} class="bandlabel">layer {i}</text>
-				{/each}
-				<line x1="120" y1="46" x2="120" y2="76" class="edge" marker-end="url(#arr)" />
-				<line x1="120" y1="106" x2="120" y2="136" class="edge" marker-end="url(#arr)" />
-				<line x1="120" y1="166" x2="120" y2="196" class="edge" marker-end="url(#arr)" />
-				<line x1="133" y1="46" x2="209" y2="137" class="edge" marker-end="url(#arr)" />
-				<line x1="214" y1="166" x2="177" y2="255" class="edge" marker-end="url(#arr)" />
-				<line x1="127" y1="226" x2="164" y2="256" class="edge" marker-end="url(#arr)" />
-				<circle cx="170" cy="90" r="4" class="dummy" />
-				<circle cx="196" cy="210" r="4" class="dummy" />
-				<rect x="90" y="18" width="60" height="24" rx="10" class="pill" />
-				<text x="120" y="34">fetch</text>
-				<rect x="90" y="78" width="60" height="24" rx="10" class="pill" />
-				<text x="120" y="94">clean</text>
-				<rect x="90" y="138" width="60" height="24" rx="10" class="pill" />
-				<text x="120" y="154">merge</text>
-				<rect x="190" y="138" width="60" height="24" rx="10" class="pill" />
-				<text x="220" y="154">log</text>
-				<rect x="90" y="198" width="60" height="24" rx="10" class="pill" />
-				<text x="120" y="214">stats</text>
-				<rect x="140" y="258" width="60" height="24" rx="10" class="pill" />
-				<text x="170" y="274">ship</text>
-			</svg>
+			{@render layfig(FLAT, FLAT_RK)}
 			<figcaption>
 				<b>Flat</b>: five layers. <code>fetch → log</code> and <code>log → ship</code>
 				each skip a layer — two dummies, span 8.
@@ -497,12 +311,12 @@ lint --> pack`;
 		</figure>
 		<figure>
 			<svg viewBox="0 0 320 320" class="figsvg" role="img" aria-label="Boxed layering">
-				<rect x="4" y="10" width="312" height="40" class="band" />
-				<text x="8" y="24" class="bandlabel">layer 0</text>
+				<rect x="4" y="9" width="312" height="42" class="band" />
+				<text x="8" y="23" class="bandlabel">layer 0</text>
 				<rect x="4" y="65" width="312" height="190" class="band" />
 				<text x="8" y="79" class="bandlabel">layer 1</text>
-				<rect x="4" y="270" width="312" height="40" class="band" />
-				<text x="8" y="284" class="bandlabel">layer 2</text>
+				<rect x="4" y="269" width="312" height="42" class="band" />
+				<text x="8" y="283" class="bandlabel">layer 2</text>
 				<rect x="60" y="70" width="120" height="180" class="cluster" />
 				<text x="70" y="86" class="cltitle">process</text>
 				<line x1="120" y1="42" x2="120" y2="94" class="edge" marker-end="url(#arr)" />
@@ -560,36 +374,7 @@ lint --> pack`;
 			</label>
 		</div>
 		<div class="play-fig">
-			{#if pfig}
-				<svg viewBox="0 0 {pfig.w + 150} {pfig.h + 24}" class="playsvg" role="img" aria-label="Live layering result">
-					<g transform="translate(70, 12)">
-						{#each pfig.bands as b, i}
-							<rect x="-62" y={b.y - 21} width={pfig.w + 134} height="42" class="band" />
-							<text x="-58" y={b.y - 7} class="bandlabel">layer {i}</text>
-							<text x={pfig.w + 68} y={b.y + 4} class="occ">{b.real}+{b.dummy}</text>
-						{/each}
-						{#each pfig.edges as e}
-							<polyline
-								points={e.pts.map((p) => `${p.x},${p.y}`).join(' ')}
-								class="edge"
-								class:up={e.up}
-								marker-end={e.up ? 'url(#arr-up)' : 'url(#arr)'}
-							/>
-							{#each e.dots as d}
-								<circle cx={d.x} cy={d.y} r="4" class="dummy" />
-							{/each}
-						{/each}
-						{#each pfig.nodes as n}
-							<rect x={n.x - n.w / 2} y={n.y - n.h / 2} width={n.w} height={n.h} rx="12" class="pill" />
-							<text x={n.x} y={n.y + 4}>{n.label}</text>
-						{/each}
-					</g>
-				</svg>
-				<p class="dim stats">
-					layers: {pfig.bands.length} · total span: {pfig.span} · dummies: {pfig.dummies}
-				</p>
-			{/if}
-			{#if perr}<p class="dim">{perr}</p>{/if}
+			<ElkGrid src={playSrc} options={lay(playLay)} />
 		</div>
 	</div>
 
@@ -601,7 +386,8 @@ lint --> pack`;
 		<li>Longest-path minimizes height in one pass; network simplex minimizes span; width caps count only the nodes you can see, which is their undoing.</li>
 	</ul>
 	<p class="dim">
-		Next: crossing minimization — where the spaghetti is fought, one layer pair at a time.
+		Next: <a href="{base}/learn/crossing-minimization">crossing minimization</a> — where the
+		spaghetti is fought, one layer pair at a time.
 	</p>
 </div>
 
@@ -666,7 +452,6 @@ lint --> pack`;
 		margin: 0 auto 0.4rem;
 	}
 	.figsvg text,
-	.playsvg text,
 	.arena text {
 		fill: var(--fg);
 		font-size: 13px;
@@ -701,6 +486,11 @@ lint --> pack`;
 	.dummy {
 		fill: var(--dim);
 	}
+	.slot {
+		fill: none;
+		stroke: var(--muted);
+		stroke-dasharray: 3 3;
+	}
 	.cluster {
 		fill: color-mix(in srgb, var(--purple) 7%, transparent);
 		stroke: var(--muted);
@@ -712,6 +502,7 @@ lint --> pack`;
 	}
 
 	.arena {
+		user-select: none;
 		width: 100%;
 		max-width: 34rem;
 		display: block;
@@ -760,22 +551,10 @@ lint --> pack`;
 		margin: 0;
 		min-width: 0;
 	}
-	.playsvg {
-		width: 100%;
-		max-height: 34rem;
-		display: block;
-	}
-	.playsvg polyline {
-		fill: none;
-	}
 	svg .occ {
 		fill: var(--dim);
 		font-size: 11px;
 		text-anchor: start;
-	}
-	.stats {
-		text-align: center;
-		margin: 0.2rem 0 0;
 	}
 	.controls textarea {
 		width: 100%;

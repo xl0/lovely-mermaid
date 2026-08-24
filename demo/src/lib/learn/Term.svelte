@@ -18,10 +18,11 @@
 </aside>
 
 <style>
+	/* Run-in layout: the name leads the line and the definition flows after
+	   it, so long names (three-author reference cards) don't squeeze the
+	   text into a narrow column. */
 	.term {
-		display: flex;
-		gap: 0.7rem;
-		align-items: baseline;
+		display: block;
 		margin: 0.7rem 0;
 		padding: 0.45rem 0.7rem;
 		border: 1px dashed var(--muted);
@@ -30,9 +31,9 @@
 		color: var(--dim);
 	}
 	.name {
-		flex-shrink: 0;
 		color: var(--purple);
 		font-weight: bold;
+		margin-right: 0.7rem;
 	}
 	a.name {
 		text-decoration: none;
