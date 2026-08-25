@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `gantt` charts with proportional task bars, ruled time axes, sections, dependencies, and task status classes.
+
 ### Fixed
 
 - An adjacent-rank back-edge label no longer loses its last character when it sets the canvas width (`retry` rendered `retr` inside a composite region).

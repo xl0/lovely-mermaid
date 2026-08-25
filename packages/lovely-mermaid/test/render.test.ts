@@ -52,6 +52,19 @@ test('`:::` classes are captured in state and class diagrams', () => {
   ).toBe(true)
 })
 
+test('gantt task tags reach task label and bar spans', () => {
+  const art = render('gantt\n dateFormat HH:mm\n Build : active, build, 09:00, 1h')
+  if (art === null) throw new Error('render drew nothing')
+  expect(
+    art.styled
+      .flat()
+      .some((span) => span.text.includes('Build') && span.classes?.includes('active')),
+  ).toBe(true)
+  expect(
+    art.styled.flat().some((span) => span.role === 'edge' && span.classes?.includes('active')),
+  ).toBe(true)
+})
+
 test('the source box carries no classDefs', () => {
   expect(sourceBox('gantt\n title Plan', 80).classDefs).toEqual({})
 })
@@ -64,11 +77,11 @@ test('blank source returns null', () => {
 
 test('diagramKind separates an unsupported type from a malformed one', () => {
   // Both render to null; only one is worth telling the author to fix.
-  const malformed = 'stateDiagram-v2\n bad one here\n bad two here'
+  const malformed = 'gantt\n bad task'
   expect(render(malformed)).toBeNull()
-  expect(diagramKind(malformed)).toBe('state')
+  expect(diagramKind(malformed)).toBe('gantt')
 
-  const unsupported = 'gantt\n title Plan'
+  const unsupported = 'journey\n title Plan'
   expect(render(unsupported)).toBeNull()
   expect(diagramKind(unsupported)).toBeNull()
 })
@@ -83,7 +96,7 @@ test('diagramKind reads the header without parsing the body', () => {
   expect(diagramKind('mindmap')).toBe('mindmap')
   expect(diagramKind('timeline')).toBe('timeline')
   expect(diagramKind('gitGraph LR:')).toBe('gitgraph')
-  expect(diagramKind('gantt')).toBeNull()
+  expect(diagramKind('gantt')).toBe('gantt')
   expect(diagramKind('stateDiagramFoo\n A --> B')).toBeNull()
   expect(diagramKind('classDiagram-v2\n A --> B')).toBe('class')
   expect(diagramKind('')).toBeNull()

@@ -40,7 +40,7 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
     registry.ts           the diagram table; diagramKind and render dispatch through it
     diagrams/             one module per diagram type: parse + layout glue
       flowchart.ts  state.ts  class.ts  er.ts  sequence.ts
-      pie.ts  mindmap.ts  timeline.ts  gitgraph.ts   (draw rows directly)
+      gantt.ts  pie.ts  mindmap.ts  timeline.ts  gitgraph.ts   (draw rows directly)
     layout.ts             rank, order, place, route, draw (flowchart/state/class/ER)
     layout-seq.ts         sequence diagrams (own model in diagrams/sequence.ts, own geometry)
     source-box.ts         the source framed in a titled box
@@ -299,12 +299,18 @@ title row centres, the rest left-align.
   the diagram shifts right instead of the note painting over the lifelines.
 - **YAML frontmatter is skipped**, not mistaken for a header (post-cutoff);
   upstream renders the source box for any frontmattered diagram.
-- **Four diagram types upstream never had** (post-cutoff): `pie` (labelled
-  bar list with eighth-block precision), `mindmap` (TUI tree guides; parses
-  raw lines since indentation is the grammar), `timeline` (vertical
-  period/event list, sections as headers), `gitGraph` (`git log --graph`
-  lanes, newest on top; connector rows go through the direction bits so
-  merges crossing a lane draw `┼`). They draw rows straight onto a Canvas —
+- **Five diagram types upstream never had** (post-cutoff): `gantt`
+  (proportional task bars on a natural-width ruled time axis; title and section
+  headings use `title`, axis/task labels use `text`, rules/tracks use `border`,
+  and bars/milestones use `edge`; task status tags remain author classes.
+  Unreadable dates — unsupported `dateFormat`, invalid clocks,
+  overflow-normalized days — drop with a warning rather than render at time
+  zero; milestones occupy their start instant, so dependents chain from it),
+  `pie` (labelled bar list with eighth-block precision), `mindmap` (TUI tree
+  guides; parses raw lines since indentation is the grammar), `timeline`
+  (vertical period/event list, sections as headers), `gitGraph` (`git log
+  --graph` lanes, newest on top; connector rows go through the direction bits
+  so merges crossing a lane draw `┼`). They draw rows straight onto a Canvas —
   no Sugiyama involved.
 - **Cardinalities sit at their own edge ends.** ER and class relations carry
   `cardFrom`/`cardTo` beside `label`; forward routes paint each at its end

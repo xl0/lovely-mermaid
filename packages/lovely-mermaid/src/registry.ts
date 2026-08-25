@@ -11,6 +11,7 @@ import type { Canvas } from './canvas.ts'
 import { classDiagram } from './diagrams/class.ts'
 import { er } from './diagrams/er.ts'
 import { flowchart } from './diagrams/flowchart.ts'
+import { gantt } from './diagrams/gantt.ts'
 import { gitgraph } from './diagrams/gitgraph.ts'
 import { mindmap } from './diagrams/mindmap.ts'
 import { pie } from './diagrams/pie.ts'
@@ -26,6 +27,7 @@ export type DiagramKind =
   | 'state'
   | 'class'
   | 'er'
+  | 'gantt'
   | 'sequence'
   | 'pie'
   | 'mindmap'
@@ -54,6 +56,7 @@ export const DIAGRAMS: Diagram[] = [
   classDiagram,
   er,
   sequence,
+  gantt,
   pie,
   mindmap,
   timeline,
