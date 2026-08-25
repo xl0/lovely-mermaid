@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import ElkGrid from '$lib/learn/ElkGrid.svelte';
 	import Term from '$lib/learn/Term.svelte';
 
@@ -191,24 +191,27 @@
 		for (const row of GL) for (const n of row) xs[n] = x[root(n)];
 		return xs;
 	}
-	// The four-passes figure runs on its own sparser graph: the widget graph
-	// is so constrained the passes barely differ, and the whole point is the
+	// The four-passes figure runs on its own small graph: the widget graph is
+	// so constrained the passes barely differ, and the whole point is the
 	// visible lean.
 	const BKL: string[][] = [
 		['a', 'b'],
 		['c', 'd', 'e'],
 		['f', 'g'],
-		['h']
+		['h', 'i']
 	];
 	const BKSEG: [string, string][] = [
 		['a', 'c'],
 		['a', 'd'],
-		['b', 'e'],
+		['a', 'e'],
+		['b', 'c'],
 		['c', 'f'],
 		['d', 'f'],
+		['d', 'g'],
 		['e', 'g'],
 		['f', 'h'],
-		['g', 'h']
+		['f', 'i'],
+		['g', 'i']
 	];
 	const BK_PASSES: { name: string; xs: Xs }[] = [
 		{ name: 'align ↓, compact ←', xs: bkPass(BKL, BKSEG, true, true) },
@@ -258,6 +261,12 @@
 	}
 	function drop() {
 		dragN = null;
+	}
+	function nodeKey(n: string, e: KeyboardEvent) {
+		if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+		e.preventDefault();
+		const [lo, hi] = range(xs, n);
+		xs[n] = clamp(xs[n] + (e.key === 'ArrowLeft' ? -10 : 10), lo, hi);
 	}
 
 	// ---- playground -------------------------------------------------------
@@ -332,46 +341,26 @@ f --> i`;
 	</svg>
 {/snippet}
 
-<div class="page">
-	<p class="crumbs"><a href="{base}/learn">learn</a> <span class="dim">/ node placement</span></p>
+<div class="lesson">
+	<p class="crumbs"><a href={resolve('/learn')}>learn</a> <span class="dim">/ node placement</span></p>
 	<h1>Node placement</h1>
 	<p class="lede">
-		<a href="{base}/learn/crossing-minimization">Crossing minimization</a> fixed the order in
-		every layer. Node placement turns those orders into coordinates — the first phase that
-		produces geometry rather than structure. The vertical coordinate is free: a layer is a
-		row, rows are spaced out, done. The horizontal coordinate is the decision, and it comes
-		with two hard rules: the order within a layer is kept, and neighbours keep a minimum gap.
-		Everything beyond that is taste — and the tastes disagree.
+		<a href={resolve('/learn/crossing-minimization')}>Crossing minimization</a> fixed each layer’s
+		order. Node placement now assigns horizontal coordinates. It must preserve that order and
+		leave a minimum gap between neighbours; within those constraints, it decides whether the
+		drawing is compact, balanced, or straight.
 	</p>
 	<Term name="node placement">
-		Assigning an x coordinate to every node (and every dummy) given fixed layers and fixed
-		orders. Also called coordinate assignment. Crossings are already decided; this phase
-		cannot add or remove one.
+		Assigning an x coordinate to every node and dummy after layers and orders are fixed. Also
+		called coordinate assignment. This phase changes geometry, not the crossing count.
 	</Term>
 
-	<h2>Four wishes, one axis</h2>
+	<h2>Experiment: place the nodes</h2>
 	<p>
-		We want four things from the x coordinates. Long edges <b>straight</b> — a dummy chain
-		that drifts sideways is a bend in the final edge, and every bend is work for the eye.
-		Parents <b>centred</b> over their children — this is where a drawing's symmetry comes
-		from. Edges <b>short</b>. And the whole drawing <b>narrow</b>.
-	</p>
-	<p>
-		They cannot all win. A straight chain claims one column through every layer it crosses,
-		and nothing else may use that column — so straightness eats width. Centring a parent
-		between children that sit far apart stretches and bends its edges. And packing
-		everything to the left is the narrowest drawing there is, and ruins the other three
-		wishes at once.
-	</p>
-
-	<h2>Try it</h2>
-	<p>
-		Four layers, orders fixed, two long edges. Drag anything sideways. It stops at its
-		neighbours and at the walls — the same two rules the engine works under. A <b>kink</b>,
-		in the counter below, is a dummy where the edge changes direction; width and total
-		horizontal edge length are what they sound like. Get all three numbers as low as you can,
-		then notice you cannot do it — lowering one raises another. The buttons run the methods
-		from the next section.
+		Drag any node or dummy sideways. It stops at its neighbours and the arena walls, preserving
+		order and minimum spacing. A <b>kink</b> is a dummy where its edge changes direction.
+		Try reducing width, kinks, and total horizontal edge length together, then compare the
+		three presets.
 	</p>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<svg
@@ -407,14 +396,20 @@ f --> i`;
 		{/each}
 		{#each L as row, r}
 			{#each row as n}
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<g
 					class="grab"
 					class:lift={n === dragN}
+					role="slider"
+					tabindex="0"
+					aria-label="Horizontal position of {isDummy(n) ? 'dummy' : 'node'} {n}"
+					aria-valuemin={Math.round(range(xs, n)[0])}
+					aria-valuemax={Math.round(range(xs, n)[1])}
+					aria-valuenow={Math.round(xs[n])}
 					onpointerdown={(ev) => grab(n, ev)}
 					onpointermove={dragMove}
 					onpointerup={drop}
 					onpointercancel={drop}
+					onkeydown={(ev) => nodeKey(n, ev)}
 				>
 					{#if isDummy(n)}
 						<rect x={xs[n] - 14} y={BY(r) - 12} width="28" height="24" rx="10" class="slot" />
@@ -433,48 +428,60 @@ f --> i`;
 		<span>horizontal edge length: <b>{Math.round(hlen)}</b></span>
 	</div>
 	<div class="statbar">
-		<button class="ghost" onclick={() => (xs = packLeft())}>[pack left]</button>
-		<button class="ghost" onclick={() => (xs = balance(xs))}>[balance]</button>
-		<button class="ghost" onclick={() => (xs = straighten(xs))}>[straight long edges]</button>
-		<button class="ghost" onclick={() => (xs = spreadEven())}>[reset]</button>
+		<button class="ghost" onclick={() => (xs = packLeft())}>pack left</button>
+		<button class="ghost" onclick={() => (xs = balance(xs))}>balance</button>
+		<button class="ghost" onclick={() => (xs = straighten(xs))}>straight long edges</button>
+		<button class="ghost" onclick={() => (xs = spreadEven())}>reset</button>
 	</div>
 	<p>
-		<em>[pack left]</em> wins width and loses everything else — both long edges zigzag out
-		and back. <em>[balance]</em> shortens the edges and centres the nodes, but the kinks
-		survive: each dummy drifts toward whatever it touches, and its chain-mates drift
-		elsewhere. <em>[straight long edges]</em> stands each chain upright under its source,
-		leaving one bend where the edge turns toward its target. And the drawing gets wider.
+		<em>Pack left</em> minimizes width, but both long edges zigzag. <em>Balance</em> shortens
+		edges and centres nodes, while allowing each dummy to move independently, so kinks remain.
+		<em>Straight long edges</em> aligns each chain under its source and leaves one bend near
+		the target. The aligned result is wider.
+	</p>
+	<h2>Four objectives, one axis</h2>
+	<p>
+		We want long edges <b>straight</b>, parents <b>centred</b> over their children, edges
+		<b>short</b>, and the whole drawing <b>narrow</b>. A dummy chain that drifts sideways
+		becomes a bend in the final edge; centring related nodes creates useful symmetry.
 	</p>
 	<p>
-		The widening is worth a second look, because nothing in any single layer demands it.
+		The objectives conflict. A straight dummy chain reserves one column through every layer
+		it crosses, which can widen the drawing. Centring a parent over distant children lengthens
+		its edges. Packing every row against the left margin minimizes width but usually produces
+		poor alignment.
+	</p>
+	<p>
+		No single layer explains the extra width.
 		<code>a</code>'s column must clear three nodes in layer 1. <code>b</code>'s column must
 		clear two more nodes in layer 2, to the right of <code>a</code>'s column. Count the gaps
 		from the left wall to <code>b</code>'s column: three to clear <code>c</code>,
 		<code>d</code>, <code>e</code>, then three more to clear <code>f</code> and
 		<code>g</code> and keep the columns apart — six, in a graph where no single layer needs
-		more than four. Rigid columns accumulate constraints <em>across</em> layers.
-		That is the width bill, and it is why straightness is a choice rather than a default.
+		more than four. Rigid columns accumulate spacing constraints across layers. Straightness
+		therefore has a global width cost.
 	</p>
 
 	<h2>How engines place</h2>
 	<p>
-		The four methods in real engines all answer the same question — who decides where the
-		slack goes — and the answers are: priorities, rigid pieces, averaged alignments, or a
-		price list.
+		Placement methods differ mainly in how they distribute unused horizontal space. Four
+		common answers are priorities, rigid segments, averaged alignments, and weighted
+		optimization.
 	</p>
 	<p>
 		The <b>priority method</b> is the classic. Walk the layers top to bottom. In each layer,
-		take the nodes one at a time, most important first, and move each toward the average
-		position of its neighbours in the layer above — as far as the current gaps allow. Dummies
-		count as the most important nodes of all, so the chains settle first, and straight; the
-		real nodes then fit in around them. Walk back bottom to top the same way, and repeat a
-		few times. The <em>[balance]</em> button above is this method, minus the priorities.
+		process dummies first, then real nodes from most to fewest neighbours in the layer above.
+		Move each toward those neighbours’ average position, as far as the current gaps allow; a
+		higher-priority node may push lower-priority nodes aside. Dummy chains therefore settle
+		first, and straight, while real nodes fit around them. Walk back bottom to top using the
+		layer below, and repeat a few times. The <em>balance</em> preset above demonstrates the same
+		attraction toward neighbours, but omits priorities.
 	</p>
 	<p>
 		<b>Linear segments</b> reach straightness by construction instead. All the dummies of one
 		edge form a single segment, and a segment only moves as one piece — so a long edge cannot
-		kink in the middle, because there is no joint there to bend. That is what
-		<em>[straight long edges]</em> does. The pair below shows what it buys and what it costs:
+		kink in the middle, because there is no independent joint there to bend. That is what
+		<em>straight long edges</em> demonstrates:
 	</p>
 	<div class="row">
 		<figure>
@@ -520,10 +527,10 @@ f --> i`;
 		<figcaption><b>average of the four</b></figcaption>
 	</figure>
 	<p>
-		Each pass leans; the average stands straight, edges are vertical wherever an alignment
-		allowed it, and the whole thing runs in linear time. The known weakness is width — blocks
-		refuse to overlap and push the drawing outward; on a corpus of real diagrams, linear
-		segments came out about fifteen percent narrower for the same graphs.
+		Each pass leans toward its compaction direction. Averaging cancels much of that bias while
+		preserving many vertical alignments, and the algorithm runs in linear time. Its block
+		compaction can produce wide drawings. In our comparison corpus, the linear-segments
+		strategy was about fifteen percent narrower on average.
 	</p>
 	<Term name="Brandes & Köpf (2002)" href="https://doi.org/10.1007/3-540-45848-4_3">
 		<em>Fast and simple horizontal coordinate assignment</em> — median alignment into blocks,
@@ -539,11 +546,10 @@ f --> i`;
 
 	<h2>Playground</h2>
 	<p>
-		The engine's four placement strategies on one graph, drawn with its real coordinates —
-		no slot grid this time, the coordinates are the point. Watch the width and the kink
-		count: Brandes–Köpf is the widest and straightest, linear segments narrower with a kink
-		more, network simplex in between, and <code>SIMPLE</code> — plain packing — the narrowest
-		and the crookedest.
+		The playground uses the engine’s real coordinates rather than the slot grid. On this
+		particular graph, Brandes–Köpf is widest and straightest; linear segments is narrower with
+		one additional kink; network simplex falls between them; and <code>SIMPLE</code> packs
+		most tightly while bending the long edges most.
 	</p>
 	<div class="play">
 		<div class="controls">
@@ -577,43 +583,6 @@ f --> i`;
 </div>
 
 <style>
-	.page {
-		max-width: 52rem;
-		margin: 0 auto;
-		padding: 1.5rem 1rem 4rem;
-		line-height: 1.55;
-	}
-	.crumbs a,
-	a {
-		color: var(--cmd);
-	}
-	h1 {
-		font-size: 1.4rem;
-	}
-	h2 {
-		font-size: 1.1rem;
-		margin-top: 2.2rem;
-		color: var(--accent);
-	}
-	.lede {
-		font-size: 1.05rem;
-	}
-	.dim {
-		color: var(--dim);
-	}
-	code {
-		font-size: 0.92em;
-		background: var(--custom-bg);
-		border-radius: 3px;
-		padding: 0 0.25em;
-	}
-
-	.row {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1rem;
-		align-items: start;
-	}
 	.row5 {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
@@ -638,147 +607,5 @@ f --> i`;
 	}
 	.bkavg figcaption {
 		text-align: center;
-	}
-	@media (max-width: 40rem) {
-		.row {
-			grid-template-columns: 1fr;
-		}
-	}
-	.row figure {
-		margin: 0;
-	}
-	figcaption {
-		font-size: 0.9rem;
-		color: var(--dim);
-	}
-	figcaption b {
-		color: var(--fg);
-	}
-
-	.figsvg {
-		width: 100%;
-		max-width: 26rem;
-		display: block;
-		margin: 0 auto 0.4rem;
-	}
-	.figsvg text,
-	.arena text {
-		fill: var(--fg);
-		font-size: 13px;
-		text-anchor: middle;
-	}
-	.edge {
-		fill: none;
-		stroke: var(--accent);
-		stroke-width: 1.4;
-	}
-	.arrhead {
-		fill: var(--accent);
-	}
-	.pill {
-		fill: var(--custom-bg);
-		stroke: var(--fg);
-	}
-	.band {
-		fill: color-mix(in srgb, var(--accent) 8%, transparent);
-	}
-	svg .bandlabel {
-		fill: var(--dim);
-		font-size: 10px;
-		text-anchor: start;
-	}
-	.dummy {
-		fill: var(--dim);
-	}
-	.slot {
-		fill: none;
-		stroke: var(--muted);
-		stroke-dasharray: 3 3;
-	}
-
-	.arena {
-		user-select: none;
-		width: 100%;
-		max-width: 34rem;
-		display: block;
-		margin: 0 auto;
-		touch-action: none;
-	}
-	.grab {
-		cursor: grab;
-	}
-	/* The dummy slot is fill: none, so only its dashed outline and the dot
-	   would be grabbable; pointer-events: all makes the whole area hit. */
-	.grab .slot {
-		pointer-events: all;
-	}
-	.grab.lift .pill,
-	.grab.lift .slot {
-		stroke: var(--accent);
-		stroke-width: 2;
-	}
-	.grab text {
-		user-select: none;
-	}
-	.statbar {
-		display: flex;
-		gap: 1.4rem;
-		align-items: baseline;
-		justify-content: center;
-		margin: 0.4rem 0 0;
-	}
-	.statbar .good {
-		color: var(--accent);
-	}
-	.ghost {
-		font: inherit;
-		border: none;
-		background: none;
-		color: var(--cmd);
-		cursor: pointer;
-		padding: 0;
-	}
-
-	.play {
-		display: grid;
-		grid-template-columns: minmax(16rem, 24rem) 1fr;
-		gap: 1rem;
-		align-items: start;
-	}
-	.play-fig {
-		margin: 0;
-		min-width: 0;
-	}
-	.controls textarea {
-		width: 100%;
-		box-sizing: border-box;
-		font: inherit;
-		font-size: 0.9rem;
-		font-variant-ligatures: none;
-		background: var(--custom-bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 4px;
-		padding: 0.5rem;
-		resize: vertical;
-	}
-	.controls label {
-		display: flex;
-		gap: 0.6rem;
-		align-items: center;
-		margin-top: 0.5rem;
-	}
-	.controls select {
-		font: inherit;
-		font-size: 0.9rem;
-		background: var(--bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 3px;
-	}
-	@media (max-width: 52rem) {
-		.play {
-			grid-template-columns: 1fr;
-		}
 	}
 </style>

@@ -8,7 +8,7 @@
 	let { name, href, children }: { name: string; href?: string; children: Snippet } = $props();
 </script>
 
-<aside class="term">
+<aside class="term" class:reference={href !== undefined}>
 	{#if href}
 		<a class="name" {href} target="_blank" rel="noreferrer">{name} ↗</a>
 	{:else}
@@ -23,12 +23,18 @@
 	   text into a narrow column. */
 	.term {
 		display: block;
-		margin: 0.7rem 0;
-		padding: 0.45rem 0.7rem;
+		margin: 0.9rem 0;
+		padding: 0.55rem 0.75rem;
 		border: 1px dashed var(--muted);
 		border-radius: 5px;
 		font-size: 0.9rem;
 		color: var(--dim);
+	}
+	.term.reference {
+		border: 0;
+		border-left: 2px solid var(--muted);
+		border-radius: 0;
+		padding-block: 0.25rem;
 	}
 	.name {
 		color: var(--purple);

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import ElkGrid from '$lib/learn/ElkGrid.svelte';
 	import { edgePts, slotted, type Fig } from '$lib/learn/slots';
 	import Term from '$lib/learn/Term.svelte';
@@ -73,6 +73,12 @@
 	function drop() {
 		dragL = null;
 	}
+	function nodeKey(n: string, e: KeyboardEvent) {
+		if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+		e.preventDefault();
+		const by = e.key === 'ArrowUp' ? -1 : 1;
+		layers[n] = Math.max(0, Math.min(NLAYERS - 1, layers[n] + by));
+	}
 
 	// ---- playground (ElkGrid does the drawing) ------------------------------
 	const PIPE = `src[source] --> lex
@@ -127,60 +133,25 @@ lint --> pack`;
 	</svg>
 {/snippet}
 
-<div class="page">
-	<p class="crumbs"><a href="{base}/learn">learn</a> <span class="dim">/ layering</span></p>
+<div class="lesson">
+	<p class="crumbs"><a href={resolve('/learn')}>learn</a> <span class="dim">/ layering</span></p>
 	<h1>Layering</h1>
 	<p class="lede">
-		<a href="{base}/learn/cycle-breaking">Cycle breaking</a> left us a DAG. Now we assign
-		every node a <b>layer</b> — a row number — with one hard rule: every edge must point
-		strictly downward. That rule alone leaves enormous freedom, and this page is about how
-		we spend it.
+		<a href={resolve('/learn/cycle-breaking')}>Cycle breaking</a> left us a DAG. Layering assigns
+		each node to a row, with one hard rule: every edge must point strictly downward. Many
+		assignments satisfy that rule. The useful ones balance height, edge length, and width.
 	</p>
 	<Term name="layer">
-		The row a node is assigned to; layer 0 is the top row. Not Photoshop layers — nothing is
-		stacked in z here, a layer is a row on the page. graphviz calls the same thing a
-		<em>rank</em>, and "level" also appears in the literature.
+		The row assigned to a node; layer 0 is the top row. Graphviz calls it a <em>rank</em>,
+		and some papers use <em>level</em>. It is not a z-axis layer.
 	</Term>
 
-	<h2>Three prices, pick two</h2>
+	<h2>Experiment: assign the layers</h2>
 	<p>
-		Any assignment with all edges pointing down is <em>valid</em>, so validity is cheap —
-		put every node on its own layer and we're done. Good is harder. We judge a layering on
-		three counts: <b>height</b> (how many layers), <b>total edge span</b> (how many layers
-		all the edges cross, added up), and <b>width</b> (how much sits on each layer — real
-		nodes plus dummy nodes). The three pull against each other: squeezing height stretches
-		edges; shortening edges can pile nodes onto the same layer.
-	</p>
-	<Term name="edge span">
-		The number of layers an edge crosses: layer(target) − layer(source). Span 1 is the ideal —
-		the edge connects adjacent rows. Total span is the usual single number for "how short are
-		the edges".
-	</Term>
-	<p>
-		There is one more cost, and it is the important one. An edge with span 3 does not stay a
-		single line: at each of the 2 layers it skips, the engine inserts a <b>dummy node</b> —
-		an invisible placeholder that later phases treat exactly like a real node. Why? Those
-		phases only reason about one layer at a time: they order nodes within a layer, then pick
-		coordinates. A long edge passing through a layer where it has no node would be invisible
-		to that machinery — nothing would count its crossings, keep nodes out of its way, or
-		reserve room for it. The dummy is the edge's stand-in, giving it a seat in every layer
-		it crosses. The price: a dummy occupies a slot, pushes real nodes apart, and risks a
-		bend in the final edge. A layer's true width is real nodes <em>plus</em> dummies. This is
-		the bill we promised last lesson: long edges quietly cost width.
-	</p>
-	<Term name="dummy node">
-		A placeholder inserted at every intermediate layer of a long edge, splitting it into span-1
-		pieces. Invisible in the output, fully present in every computation between layering and
-		routing.
-	</Term>
-
-	<h2>Try it</h2>
-	<p>
-		Seven edges, five rows to play with. Drag nodes between rows — red edges point the wrong
-		way and must be fixed first. The dots are the dummy nodes, each drawn with the slot it takes;
-		watch them appear the moment an edge skips a row, and the row's count on the right
-		go up. The starting position is valid but wasteful: total span 11. The minimum
-		is 8 — find it.
+		Drag the six nodes between five rows. A red edge points the wrong way, so fix those first.
+		When an edge skips a row, a dotted slot appears there: the dot is the placeholder carried
+		by that edge. Each row’s count shows real nodes + placeholders. Total span is the number
+		of layer gaps crossed by all edges. The starting assignment has span 11; the minimum is 8.
 	</p>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<svg
@@ -218,14 +189,20 @@ lint --> pack`;
 			<circle cx={d.x} cy={BY(d.layer)} r="4" class="dummy" />
 		{/each}
 		{#each LN as n}
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<g
 				class="grab"
 				class:lift={n === dragL}
+				role="slider"
+				tabindex="0"
+				aria-label="Layer of node {n}"
+				aria-valuemin="0"
+				aria-valuemax={NLAYERS - 1}
+				aria-valuenow={layers[n]}
 				onpointerdown={(ev) => grab(n, ev)}
 				onpointermove={dragMove}
 				onpointerup={drop}
 				onpointercancel={drop}
+				onkeydown={(ev) => nodeKey(n, ev)}
 			>
 				<rect x={slot.x[n] - 20} y={yOf(n) - 12} width="40" height="24" rx="10" class="pill" />
 				<text x={slot.x[n]} y={yOf(n) + 4}>{n}</text>
@@ -239,15 +216,43 @@ lint --> pack`;
 			<span class="dim">(minimum: 8)</span>
 		</span>
 		<span>dummies: <b>{nBad > 0 ? '–' : nDummy}</b></span>
-		<button class="ghost" onclick={() => (layers = { ...LONGEST_PATH })}>[longest path]</button>
-		<button class="ghost" onclick={() => (layers = { ...MIN_SPAN })}>[min span]</button>
-		<button class="ghost" onclick={() => (layers = { ...START })}>[reset]</button>
+		<button class="ghost" onclick={() => (layers = { ...LONGEST_PATH })}>longest path</button>
+		<button class="ghost" onclick={() => (layers = { ...MIN_SPAN })}>min span</button>
+		<button class="ghost" onclick={() => (layers = { ...START })}>reset</button>
 	</div>
+	<h2>Three competing objectives</h2>
 	<p>
-		Two things worth noticing while you drag. Node <code>f</code> has slack — both layer 1 and
-		layer 2 are valid — and the choice is not free: layer 1 costs one dummy, layer 2 costs two.
-		And pulling <code>e</code> down to layer 4 changes nothing about validity while quietly
-		adding a dummy per incoming edge. Valid is easy; cheap takes bookkeeping.
+		Validity is easy: put every node on its own layer in topological order. A useful
+		layering is judged by three quantities: <b>height</b>, the number of layers;
+		<b>total edge span</b>, the number of layer gaps crossed by all edges; and
+		<b>layer occupancy</b>, how many real and placeholder nodes must share each row.
+		Reducing one can increase another. Fewer layers stretch some edges; shorter edges can
+		crowd a layer.
+	</p>
+	<Term name="edge span">
+		The number of layers an edge crosses: layer(target) − layer(source). Span 1 connects
+		adjacent rows. Total span adds that number over every edge.
+	</Term>
+	<h2>Why long edges occupy width</h2>
+	<p>
+		An edge with span 3 skips two intermediate layers. The engine inserts one
+		<b>dummy node</b> in each, splitting the edge into three adjacent-layer pieces. Later
+		phases work one layer pair at a time, so these placeholders let them count crossings,
+		order the edge among real nodes, and reserve a route through each row.
+	</p>
+	<p>
+		Dummies are invisible in the final drawing, but not in the computation. Each occupies a
+		slot, can push real nodes apart, and can become a bend in the routed edge. That is how a
+		long edge consumes width even when its endpoints are small.
+	</p>
+	<Term name="dummy node">
+		A placeholder inserted in every intermediate layer of a long edge. It is hidden in the
+		output but participates in ordering and placement like a real node.
+	</Term>
+	<p>
+		Node <code>f</code> has slack: layers 1 and 2 are both valid. Layer 1 creates one dummy;
+		layer 2 creates two. Pulling <code>e</code> down to layer 4 also preserves validity while
+		adding one dummy to each incoming edge. Validity alone does not reveal either cost.
 	</p>
 
 	<h2>How engines choose</h2>
@@ -258,17 +263,17 @@ lint --> pack`;
 		<figure>
 			{@render layfig(FIGW, LONGEST_PATH)}
 			<figcaption>
-				<b>Longest path</b>: layer = the longest chain of edges below the node. One graph
-				traversal, minimal height, and zero regard for span — <code>f</code> lands next to
-				<code>d</code>, span 9, two dummies. Nodes with slack sink as low as they can go.
+				<b>Longest path</b>: each node follows the longest source-to-node path. One graph
+				traversal gives minimum height, without minimizing total span. Here
+				<code>f</code> lands beside <code>d</code>: span 9, two dummies.
 			</figcaption>
 		</figure>
 		<figure>
 			{@render layfig(FIGW, MIN_SPAN)}
 			<figcaption>
-				<b>Minimum span</b> (network simplex): solve for the layering with the smallest
-				total span — span 8, one dummy. Same height here, but earned rather than stumbled
-				into. This is the default in most engines.
+				<b>Minimum span</b> (network simplex): optimize the layering for total span. This
+				answer has span 8 and one dummy, with the same height as longest path. Network
+				simplex is the usual default in layered engines.
 			</figcaption>
 		</figure>
 	</div>
@@ -280,11 +285,10 @@ lint --> pack`;
 	<p>
 		There are also strategies that target width directly — cap how many nodes a layer may
 		hold and fill layers like a scheduler assigning jobs to time slots (Coffman–Graham is
-		the classic). They have a blind spot: the cap counts <em>real</em> nodes, and on real
-		diagrams the dummies often outnumber them. A layering that proudly holds every layer to
-		three nodes can still come out wider than the default, because the long edges it created
-		fill the layers with dummies. We've measured exactly that on a corpus of real-world
-		diagrams.
+		the classic). The cap is applied before dummy insertion, so it counts real nodes but not
+		the placeholders created by long edges. A nominal three-node layer can therefore become
+		wide after its long edges are expanded. In our comparison corpus, that effect often erased
+		the expected width saving.
 	</p>
 	<Term name="Coffman & Graham (1972)" href="https://doi.org/10.1007/BF00288685">
 		<em>Optimal scheduling for two-processor systems</em> — a scheduling algorithm, later
@@ -342,7 +346,7 @@ lint --> pack`;
 				<b>Boxed</b>: the outer layering sees three layers, and the box is one node on
 				one of them — its three internal layers collapse into a single tall row. Every
 				span is 1, zero dummies; yet <code>log</code>'s edges are the longest lines here.
-				Hierarchy re-denominates the cost, it does not refund it.
+				The layer count fell, but the geometry did not become free.
 			</figcaption>
 		</figure>
 	</div>
@@ -386,206 +390,18 @@ lint --> pack`;
 		<li>Longest-path minimizes height in one pass; network simplex minimizes span; width caps count only the nodes you can see, which is their undoing.</li>
 	</ul>
 	<p class="dim">
-		Next: <a href="{base}/learn/crossing-minimization">crossing minimization</a> — where the
+		Next: <a href={resolve('/learn/crossing-minimization')}>crossing minimization</a> — where the
 		spaghetti is fought, one layer pair at a time.
 	</p>
 </div>
 
 <style>
-	.page {
-		max-width: 52rem;
-		margin: 0 auto;
-		padding: 1.5rem 1rem 4rem;
-		line-height: 1.55;
-	}
-	.crumbs a,
-	a {
-		color: var(--cmd);
-	}
-	h1 {
-		font-size: 1.4rem;
-	}
-	h2 {
-		font-size: 1.1rem;
-		margin-top: 2.2rem;
-		color: var(--accent);
-	}
-	.lede {
-		font-size: 1.05rem;
-	}
-	.dim {
-		color: var(--dim);
-	}
-	code {
-		font-size: 0.92em;
-		background: var(--custom-bg);
-		border-radius: 3px;
-		padding: 0 0.25em;
-	}
-
-	.row {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1rem;
-		align-items: start;
-	}
-	@media (max-width: 40rem) {
-		.row {
-			grid-template-columns: 1fr;
-		}
-	}
-	.row figure {
-		margin: 0;
-	}
-	figcaption {
-		font-size: 0.9rem;
-		color: var(--dim);
-	}
-	figcaption b {
-		color: var(--fg);
-	}
-
-	.figsvg {
-		width: 100%;
-		max-width: 26rem;
-		display: block;
-		margin: 0 auto 0.4rem;
-	}
-	.figsvg text,
-	.arena text {
-		fill: var(--fg);
-		font-size: 13px;
-		text-anchor: middle;
-	}
-	.edge {
-		fill: none;
-		stroke: var(--accent);
-		stroke-width: 1.4;
-	}
-	.edge.up {
-		stroke: var(--err);
-	}
-	.arrhead {
-		fill: var(--accent);
-	}
-	.arrhead-up {
-		fill: var(--err);
-	}
-	.pill {
-		fill: var(--custom-bg);
-		stroke: var(--fg);
-	}
-	.band {
-		fill: color-mix(in srgb, var(--accent) 8%, transparent);
-	}
-	svg .bandlabel {
-		fill: var(--dim);
-		font-size: 10px;
-		text-anchor: start;
-	}
-	.dummy {
-		fill: var(--dim);
-	}
-	.slot {
-		fill: none;
-		stroke: var(--muted);
-		stroke-dasharray: 3 3;
-	}
-	.cluster {
-		fill: color-mix(in srgb, var(--purple) 7%, transparent);
-		stroke: var(--muted);
-	}
-	svg .cltitle {
-		fill: var(--dim);
-		font-size: 11px;
-		text-anchor: start;
-	}
-
-	.arena {
-		user-select: none;
-		width: 100%;
-		max-width: 34rem;
-		display: block;
-		margin: 0 auto;
-		touch-action: none;
-	}
-	.grab {
-		cursor: grab;
-	}
-	.grab.lift .pill {
-		stroke: var(--accent);
-		stroke-width: 2;
-	}
-	.grab text {
-		user-select: none;
-	}
-	.statbar {
-		display: flex;
-		gap: 1.4rem;
-		align-items: baseline;
-		justify-content: center;
-		margin: 0.4rem 0 0;
-	}
-	.statbar .good {
-		color: var(--accent);
-	}
 	.statbar .bad {
 		color: var(--err);
-	}
-	.ghost {
-		font: inherit;
-		border: none;
-		background: none;
-		color: var(--cmd);
-		cursor: pointer;
-		padding: 0;
-	}
-
-	.play {
-		display: grid;
-		grid-template-columns: minmax(16rem, 24rem) 1fr;
-		gap: 1rem;
-		align-items: start;
-	}
-	.play-fig {
-		margin: 0;
-		min-width: 0;
 	}
 	svg .occ {
 		fill: var(--dim);
 		font-size: 11px;
 		text-anchor: start;
-	}
-	.controls textarea {
-		width: 100%;
-		box-sizing: border-box;
-		font: inherit;
-		font-size: 0.9rem;
-		font-variant-ligatures: none;
-		background: var(--custom-bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 4px;
-		padding: 0.5rem;
-		resize: vertical;
-	}
-	.controls label {
-		display: flex;
-		gap: 0.6rem;
-		align-items: center;
-		margin-top: 0.5rem;
-	}
-	.controls select {
-		font: inherit;
-		font-size: 0.9rem;
-		background: var(--bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 3px;
-	}
-	@media (max-width: 52rem) {
-		.play {
-			grid-template-columns: 1fr;
-		}
 	}
 </style>

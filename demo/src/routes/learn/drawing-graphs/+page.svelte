@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import * as d3 from 'd3-force';
 	import More from '$lib/learn/More.svelte';
 	import Term from '$lib/learn/Term.svelte';
@@ -452,7 +452,7 @@
 			<div class="pending dim">running…</div>
 		{/if}
 		{#if jobOf(name).seeded}
-			<button class="ghost rerun" onclick={() => runJob(jobOf(name))}>[re-run]</button>
+			<button class="ghost rerun" onclick={() => runJob(jobOf(name))}>re-run</button>
 		{/if}
 		{#if caption !== ''}<figcaption>{caption}</figcaption>{/if}
 	</figure>
@@ -510,14 +510,13 @@
 	</figure>
 {/snippet}
 
-<div class="page">
-	<p class="crumbs"><a href="{base}/learn">learn</a> <span class="dim">/ drawing graphs</span></p>
+<div class="lesson">
+	<p class="crumbs"><a href={resolve('/learn')}>learn</a> <span class="dim">/ drawing graphs</span></p>
 	<h1>Lesson 0: how do you draw a graph at all?</h1>
 	<p class="lede">
-		A graph is not a picture. It is structure — things and arrows — with no inherent geometry.
-		Layout invents that geometry. This page is our map: what makes a drawing good, the main
-		families of layout algorithms, and why flowcharts and architecture diagrams use the
-		<b>layered</b> family — which we'll dissect phase by phase.
+		A graph contains things and connections, not coordinates. Layout invents the picture.
+		This page compares the main layout families, defines what a “good” drawing can mean, and
+		explains why directed software diagrams usually use layered layout.
 	</p>
 	<Term name="graph">
 		Things and connections: <em>nodes</em> (the things) and <em>edges</em> (the connections).
@@ -565,13 +564,12 @@
 
 	<h2>What "good" means</h2>
 	<p>
-		Decades of readability research boil down to a short list of aesthetic criteria: few edge
-		crossings, short edges, evenly spread nodes, few bends, symmetry where the structure has
-		it, and — for directed graphs — a consistent flow direction. The catch: the criteria
-		<b>contradict each other</b> (uniform spacing creates crossings; minimizing crossings
-		stretches edges), and optimizing almost any of them exactly is NP-hard. So every practical
-		layout algorithm is a bundle of heuristics that picks which criteria matter most. That
-		choice defines the families.
+		Common objectives include few edge crossings, short edges, even spacing, few bends,
+		symmetry where the structure supports it, and—for directed graphs—a consistent flow
+		direction. These objectives conflict. Removing a crossing may require a longer edge;
+		straightening a path may widen the drawing. Practical algorithms therefore combine
+		heuristics and prioritize different objectives. Those priorities distinguish the layout
+		families.
 	</p>
 
 	<h2>The families, up close</h2>
@@ -581,7 +579,7 @@
 			until the system settles. Optimizes "connected things sit together" and produces the
 			organic blobs you know from social-network visualizations. Strengths: works on any
 			graph, reveals clusters. Weaknesses: ignores direction entirely, results differ run to
-			run — hit <em>re-run</em> and watch the same graph settle somewhere else — and large
+				run — press <em>re-run</em> and watch the same graph settle somewhere else — and large
 			graphs get stuck in ugly local minima. The classic choice for <em>undirected</em> data.
 		</p>
 		<figure class="famfig">
@@ -597,7 +595,7 @@
 					<text x={p.x} y={p.y + 4}>{p.n}</text>
 				{/each}
 			</svg>
-			<button class="ghost rerun" onclick={startForce}>[re-run]</button>
+			<button class="ghost rerun" onclick={startForce}>re-run</button>
 			<figcaption>
 				temperature = {simAlpha.toFixed(2)}
 			</figcaption>
@@ -632,7 +630,7 @@
 					<text x={p.x} y={p.y + 4}>{p.n}</text>
 				{/each}
 			</svg>
-			<button class="ghost rerun" onclick={startDirected}>[re-run]</button>
+			<button class="ghost rerun" onclick={startDirected}>re-run</button>
 			<figcaption>
 				edges pointing upward are red — temperature = {dirAlpha.toFixed(2)}
 			</figcaption>
@@ -860,10 +858,10 @@
 	<div class="fam">
 		<p>
 			<b>Layered (Sugiyama).</b> The family for graphs where <em>direction is the meaning</em>:
-			dependencies, causality, time, control flow. Its one organizing rule: the reader's eye
-			travels one way — sources at the top, consequences below. Compare with force and stress
-			on the very same graph. Mermaid, Graphviz's dot, and ELK (the engine behind the live
-			figures on these pages) are all layered engines.
+				dependencies, causality, time, control flow. Its one organizing rule: the reader's eye
+				travels one way — sources at the top, consequences below. Compare with force and stress
+				on the very same graph. Mermaid flowcharts, Graphviz <code>dot</code>, and ELK (used
+				by the live figures on these pages) all offer layered layout.
 		</p>
 		{@render famfig('layered', 'the service graph again — every arrow pointing one way')}
 	</div>
@@ -893,13 +891,13 @@
 		Force-directed layout never notices (it makes no direction promise). Layered layout must do
 		something about it <em>before anything else can run</em> — which is why "cycle breaking" is
 		phase one of the pipeline, and where we pick up in
-		<a href="{base}/learn/cycle-breaking">lesson 1</a>.
+		<a href={resolve('/learn/cycle-breaking')}>lesson 1</a>.
 	</p>
 
 	<h2>The pipeline</h2>
 	<p>
-		A layered engine is an assembly line of five phases. Each solves one sub-problem and
-		commits to its answer:
+		A traditional layered engine proceeds through five phases. Each narrows the choices
+		available to the next:
 	</p>
 	<svg
 		viewBox="-4 0 {PHASES_W + 8} 40"
@@ -916,10 +914,9 @@
 		{/each}
 	</svg>
 	<p>
-		The order is not incidental: each phase consumes the previous phase's commitment and
-		cannot revisit it. That is what makes the whole thing fast, and it is also why layered
-		output sometimes looks locally dumb — the information needed to fix a bad decision often
-		only appears two phases later. Let's see what each phase actually decides.
+		This order makes the pipeline tractable, but it also limits later repairs. A placement
+		phase cannot reorder a layer to remove a crossing, for example. Local oddities often trace
+		back to an earlier phase whose decision is now fixed.
 	</p>
 
 	<div class="">
@@ -928,7 +925,7 @@
 			graph has a cycle, so some edges are picked and temporarily
 			reversed. Which edges get picked decides what ends up on top of what — a choice with
 			more personality than it sounds, and the subject of
-			<a href="{base}/learn/cycle-breaking">its own page</a>.
+			<a href={resolve('/learn/cycle-breaking')}>its own page</a>.
 		</p>
 	</div>
 
@@ -1034,13 +1031,12 @@
 	</div>
 
 	<div class="fam">
-		<p>
-			<b>4 · Node placement.</b> Turn the orders into actual coordinates on the cross axis.
-			The order is locked; what remains is how much space to put where. The objective is
-			straightness: a node ideally sits centred over the things it connects to, and a dummy
-			chain ideally becomes a dead-straight line — that is what makes a long edge read as one
-			stroke instead of a staircase. Straightening and compactness pull against each other,
-			and this phase decides the drawing's width.
+			<p>
+				<b>4 · Node placement.</b> Turn the orders into actual coordinates on the cross axis.
+				The order is locked; what remains is how much space to put where. The objective is
+				to balance several goals: centre related nodes, shorten edges, keep dummy chains
+				straight, and limit width. Straightness and compactness pull against each other, so
+				this phase decides where horizontal space is spent.
 		</p>
 		<div class="pair">
 			<figure class="famfig">
@@ -1071,14 +1067,14 @@
 	</div>
 
 	<div class="fam">
-		<p>
-			<b>5 · Edge routing.</b> Draw the connections. With orthogonal routing (all segments
+			<p>
+				<b>5 · Edge routing.</b> Draw the connections. With orthogonal routing (all segments
 			horizontal or vertical) the gap between two layers becomes a <em>channel</em>: each
 			crossing edge drops in, runs horizontally, and drops out. Two horizontal runs that
 			overlap must sit on different <em>tracks</em> — separate heights inside the channel —
 			and every occupied track makes the gap between the layers taller. Assigning runs to as
-			few tracks as possible is the same puzzle as scheduling meetings into as few rooms as
-			possible, and unlike most of this pipeline, it is solvable exactly.
+				few tracks as possible is the same puzzle as scheduling meetings into as few rooms.
+				Once the horizontal runs are fixed, the minimum track assignment is solvable exactly.
 		</p>
 		<figure class="famfig">
 			<svg viewBox="0 0 300 210" role="img" aria-label="Channel routing with two tracks">
@@ -1103,42 +1099,11 @@
 
 	<p class="dim">
 		Each phase gets its own page, live experiments included. Start with
-		<a href="{base}/learn/cycle-breaking">cycle breaking</a>.
+		<a href={resolve('/learn/cycle-breaking')}>cycle breaking</a>.
 	</p>
 </div>
 
 <style>
-	.page {
-		max-width: 52rem;
-		margin: 0 auto;
-		padding: 1.5rem 1rem 4rem;
-		line-height: 1.55;
-	}
-	.crumbs a,
-	a {
-		color: var(--cmd);
-	}
-	h1 {
-		font-size: 1.4rem;
-	}
-	h2 {
-		font-size: 1.1rem;
-		margin-top: 2.2rem;
-		color: var(--accent);
-	}
-	.lede {
-		font-size: 1.05rem;
-	}
-	.dim {
-		color: var(--dim);
-	}
-	code {
-		font-size: 0.92em;
-		background: var(--custom-bg);
-		border-radius: 3px;
-		padding: 0 0.25em;
-	}
-
 	.row3 {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
@@ -1154,8 +1119,6 @@
 		background: var(--term-bg);
 	}
 	figcaption {
-		font-size: 0.9rem;
-		color: var(--dim);
 		margin-top: 0.4rem;
 	}
 	svg line {
@@ -1165,36 +1128,15 @@
 	svg line.up {
 		stroke: var(--err);
 	}
-	.arrhead {
-		fill: var(--accent);
-	}
-	.arrhead-up {
-		fill: var(--err);
-	}
-	.pill {
-		fill: var(--custom-bg);
-		stroke: var(--fg);
-	}
 	svg text {
 		fill: var(--fg);
 		font-size: 13px;
 		text-anchor: middle;
 	}
-	.band {
-		fill: color-mix(in srgb, var(--accent) 8%, transparent);
-	}
-	.dummy {
-		fill: var(--dim);
-	}
 	svg line.track {
 		stroke: var(--muted);
 		stroke-width: 1;
 		stroke-dasharray: 4 4;
-	}
-	.bandlabel {
-		fill: var(--dim);
-		font-size: 10px;
-		text-anchor: start;
 	}
 
 	.pipeline {
@@ -1239,15 +1181,6 @@
 		border-radius: 6px;
 		padding: 2rem;
 		text-align: center;
-	}
-	.ghost {
-		font: inherit;
-		font-size: inherit;
-		border: none;
-		background: none;
-		color: var(--cmd);
-		cursor: pointer;
-		padding: 0;
 	}
 	@media (max-width: 48rem) {
 		.fam {

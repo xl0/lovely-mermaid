@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import DiagramViewer from '$lib/DiagramViewer.svelte';
 	import More from '$lib/learn/More.svelte';
 	import Term from '$lib/learn/Term.svelte';
@@ -182,6 +182,18 @@
 	function drop() {
 		dragN = null;
 	}
+	function moveNode(n: string, by: number) {
+		const i = order.indexOf(n);
+		const j = Math.max(0, Math.min(order.length - 1, i + by));
+		if (i === j) return;
+		order.splice(i, 1);
+		order.splice(j, 0, n);
+	}
+	function nodeKey(n: string, e: KeyboardEvent) {
+		if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+		e.preventDefault();
+		moveNode(n, e.key === 'ArrowLeft' ? -1 : 1);
+	}
 </script>
 
 <svelte:head>
@@ -215,43 +227,29 @@
 	</svg>
 {/snippet}
 
-<div class="page">
-	<p class="crumbs"><a href="{base}/learn">learn</a> <span class="dim">/ cycle breaking</span></p>
+<div class="lesson">
+	<p class="crumbs"><a href={resolve('/learn')}>learn</a> <span class="dim">/ cycle breaking</span></p>
 	<h1>Cycle breaking</h1>
 	<p class="lede">
-		<a href="{base}/learn/drawing-graphs">Lesson 0</a> showed that a graph with a cycle admits
-		no layer numbering — "every edge points forward" cannot hold. The fix is surgical: we
-		pick a few edges and <b>temporarily reverse</b> them. Layering then sees a DAG; at draw
-		time each reversed edge gets its arrowhead back and renders against the flow as a
-		feedback edge. What matters — what this page is about — is <em>which</em> edges we pick,
-		because that decides what ends up on top of what.
+		A cycle makes “every edge points forward” impossible. Layered layout gets past this by
+		<b>temporarily reversing</b> some edges. The choice is not cosmetic: it decides which
+		nodes land above the others.
 	</p>
-	<Term name="DAG">
-		Directed acyclic graph — a directed graph with no cycles. The shape layered layout actually
-		operates on; cycle breaking's whole job is to manufacture one.
-	</Term>
-	<Term name="feedback edge">
-		An edge reversed (or routed against the flow) during layout. The name fits: in real systems
-		these are usually the retries, loops, and feedback paths.
-	</Term>
-	<p class="aside">
-		Why reverse rather than delete? Because the edge still has to be drawn, and the layout still
-		wants it short. Deleting it would let the two ends drift arbitrarily far apart, and the
-		restored edge would wrap the whole diagram.
+	<p>
+		Layering works on the resulting DAG. When the drawing is routed, each reversed edge gets
+		its original direction back and appears as a feedback edge against the main flow. Nothing
+		is removed from the graph.
 	</p>
 
-	<h2>Choosing the victim is NP-hard</h2>
+	<h2>Find a better order</h2>
 	<p>
-		"Reverse as few edges as possible" has a name — the <b>minimum feedback arc set</b>
-		problem — and it is NP-hard, so no engine solves it exactly. Every real engine uses a
-		heuristic. One mental model covers all of them — the <b>linear arrangement</b>: forget
-		layers, just put all nodes on a line. Every edge now points either forward (fine) or
-		backward (must be reversed). Cycle breaking <em>is</em> choosing that order.
+		Put the nodes on a line. An edge that points right can stay as declared; an edge that
+		points left must be reversed for layering. This <b>linear arrangement</b> is the useful
+		mental model for cycle breaking.
 	</p>
 	<p>
-		Try it. Drag the nodes — arcs above the line point forward, arcs below (red) are the
-		reversals. The declared order <code>a…f</code> costs 2 reversals. One is enough; find an
-		order that achieves it.
+		Drag the nodes below. Forward edges arc above the line; reversals arc below in red. The
+		declared order <code>a…f</code> needs two reversals, but one is enough.
 	</p>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<svg
@@ -265,14 +263,20 @@
 			<path d={arcPath(e)} class:back={isBack(e)} />
 		{/each}
 		{#each ARC_N as n}
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<g
 				class="grab"
 				class:lift={n === dragN}
+				role="slider"
+				tabindex="0"
+				aria-label="Position of node {n}"
+				aria-valuemin="1"
+				aria-valuemax={ARC_N.length}
+				aria-valuenow={order.indexOf(n) + 1}
 				onpointerdown={(ev) => grab(n, ev)}
 				onpointermove={dragMove}
 				onpointerup={drop}
 				onpointercancel={drop}
+				onkeydown={(ev) => nodeKey(n, ev)}
 			>
 				<circle cx={xOf(n)} cy="100" r="15" />
 				<text x={xOf(n)} y="105">{n}</text>
@@ -283,27 +287,44 @@
 		<span>
 			reversed: <b class:good={nBack === 1}>{nBack}</b> <span class="dim">(minimum: 1)</span>
 		</span>
-		<button class="ghost" onclick={() => (order = [...ARC_N])}>[declared order]</button>
-		<button class="ghost" onclick={() => (order = [...GREEDY_ORDER])}>[greedy's answer]</button>
+		<button class="ghost" onclick={() => (order = [...ARC_N])}>declared order</button>
+		<button class="ghost" onclick={() => (order = [...GREEDY_ORDER])}>greedy answer</button>
 		<button class="ghost" onclick={() => (order = [...order].sort(() => Math.random() - 0.5))}
-			>[shuffle]</button
+			>shuffle</button
 		>
 	</div>
+	<Term name="DAG">
+		Directed acyclic graph: a directed graph with no cycles. Cycle breaking temporarily turns
+		the input into one so layering can proceed.
+	</Term>
+	<Term name="feedback edge">
+		An edge routed against the main flow. Retry, loop, and feedback paths commonly appear this
+		way.
+	</Term>
+	<p class="aside">
+		Why not hide the edge during layout? Its endpoints could then drift far apart, leaving a
+		long return route when the edge is restored. Reversing it keeps the connection present
+		while the layers are chosen.
+	</p>
 
-	<h2>The classic heuristic</h2>
+	<h2>The classic greedy heuristic</h2>
 	<p>
-		The default in most engines is the greedy heuristic of Eades, Lin and Smyth (1993). It
-		builds the line from both ends, eating the graph one node at a time:
+		Finding an order with the fewest reversals is the <b>minimum feedback arc set</b>
+		problem. It is NP-hard. General-purpose layout engines therefore use fast heuristics
+		rather than exact optimization.
+	</p>
+	<p>
+		A common default is the greedy heuristic of Eades, Lin and Smyth (1993). It builds the
+		line from both ends, removing one node at a time:
 	</p>
 	<pre>while nodes remain:
   a node with no outgoing edges (a sink)      → put it at the END
   else a node with no incoming edges (a source) → put it NEXT
   else the node with the best out − in balance  → put it NEXT</pre>
 	<p>
-		The <em>[greedy's answer]</em> button above loads its result for the widget's graph — it
-		finds the 1-reversal order. Notice what it looked at to get there: degrees. Only degrees.
-		At no point did it care what the nodes mean or in what order you declared them. Hold that
-		thought.
+		The <em>greedy answer</em> button loads its result for the widget: one reversal. The
+		heuristic reached it using only incoming and outgoing degree. It did not inspect labels or
+		declaration order. That indifference explains some surprising drawings below.
 	</p>
 	<Term name="Eades, Lin & Smyth (1993)" href="https://doi.org/10.1016/0020-0190(93)90079-O">
 		<em>A fast and effective heuristic for the feedback arc set problem</em> — the
@@ -313,16 +334,15 @@
 
 	<h2>The strategy zoo</h2>
 	<p>
-		One graph, one declaration, four strategies, four different drawings. A
-		document pipeline with a proof–edit–render loop (declared starting at <code>proof</code>),
-		assets and fonts feeding in, and an autosave branch where <code>save</code> and
-		<code>sync</code> chase each other:
+		Here is one declaration rendered four ways. It contains a proof–edit–render loop,
+		two external inputs, and an autosave loop between <code>save</code> and
+		<code>sync</code>:
 	</p>
 	<pre>{ZOO}</pre>
 	<p>
-		The drawings below reproduce what the engine outputs for each strategy, with the layers
-		highlighted. The badge on each node is the one number that strategy actually looked at.
-		Red edges are the reversals.
+		The drawings reproduce the engine’s output, with layer bands added. Each node’s badge
+		shows the value used by that strategy: degree balance, visit order, or declaration order.
+		Reversed edges are red.
 	</p>
 	<svg width="0" height="0" aria-hidden="true">
 		<defs>
@@ -372,19 +392,17 @@
 		</figure>
 	</div>
 	<p>
-		The lesson: <b>fewest reversals is not the same as most readable</b>. The first three
-		drawings reverse a near-minimal number of edges and still disagree about everything else;
-		the fourth spends twice as many reversals to follow declaration order to the letter.
-		Declaration order is information — strategies differ in whether they listen, and how hard.
+		<b>Fewest reversals does not imply most readable.</b> The first three strategies use
+		nearly the same number of reversals but produce different causal orders. The fourth
+		follows declaration order more strictly and accepts extra reversals. Source order is
+		information; strategies differ in how much weight they give it.
 	</p>
 
 	<h2>Cycles inside subgraphs</h2>
 	<p>
-		Diagrams can group nodes into a <b>subgraph</b> — the group is laid out as a unit and drawn
-		inside a titled box. Cycles like living in them (a retry loop in a box is a stock pattern),
-		and the cycle-breaking choice then decides the <em>internal order of the box</em>. Out in
-		the open a strange order is easy to forgive; inside a border with a title on it, it is
-		impossible to miss:
+		A <b>subgraph</b> is laid out as a unit and drawn inside a titled box. If it contains a
+		cycle, cycle breaking determines the order inside that box. A bad order is especially
+		obvious when a border presents the nodes as one process:
 	</p>
 	<Term name="subgraph / cluster">
 		A declared group of nodes drawn inside a shared border ("cluster" in graph-drawing
@@ -484,9 +502,10 @@
 
 	<h2>Playground</h2>
 	<p>
-		The zoo graph, editable, rendered live by the engine. Things to try: cycle through the strategies; move the <code>S[assets] --&gt; B</code> line to the top of the declaration and
-		watch what GREEDY_MODEL_ORDER does; delete <code>V --&gt; W</code> (the edge that closes
-		the save–sync cycle) and watch GREEDY fall back in line with the others.
+		The zoo graph below is editable and rendered live. Compare the four strategies. Then move
+		<code>S[assets] --&gt; B</code> to the top and watch
+		<code>GREEDY_MODEL_ORDER</code>. Finally, delete <code>V --&gt; W</code> to remove the
+		save–sync cycle and compare again.
 	</p>
 	<div class="play">
 		<div class="controls">
@@ -516,49 +535,21 @@
 		<li>Strategy is a per-diagram setting — worth reaching for when a loop renders upside down.</li>
 	</ul>
 	<p class="dim">
-		Next: <a href="{base}/learn/layering">layering</a> — what "pointing forward" turns into,
+		Next: <a href={resolve('/learn/layering')}>layering</a> — what "pointing forward" turns into,
 		and why long edges quietly cost width.
 	</p>
 </div>
 
 <style>
-	.page {
-		max-width: 52rem;
-		margin: 0 auto;
-		padding: 1.5rem 1rem 4rem;
-		line-height: 1.55;
-	}
-	.crumbs a,
-	a {
-		color: var(--cmd);
-	}
-	h1 {
-		font-size: 1.4rem;
-	}
-	h2 {
-		font-size: 1.1rem;
-		margin-top: 2.2rem;
-		color: var(--accent);
-	}
-	.lede {
-		font-size: 1.05rem;
-	}
-	.dim {
-		color: var(--dim);
-	}
 	.aside {
 		color: var(--dim);
 		border-left: 3px solid var(--muted);
 		padding-left: 0.8rem;
 	}
-	code,
 	pre {
 		font-size: 0.92em;
 		background: var(--custom-bg);
 		border-radius: 3px;
-		padding: 0 0.25em;
-	}
-	pre {
 		padding: 0.7rem 0.9rem;
 		overflow-x: auto;
 		line-height: 1.5;
@@ -571,57 +562,11 @@
 		overflow: hidden;
 		margin: 1rem 0;
 	}
-	.row {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1rem;
-		align-items: start;
-	}
-	@media (max-width: 40rem) {
-		.row {
-			grid-template-columns: 1fr;
-		}
-	}
-	.row figure {
-		margin: 0;
-	}
-
 	.figsvg {
-		width: 100%;
 		max-width: 22rem;
-		display: block;
-		margin: 0 auto 0.4rem;
 	}
 	.figsvg text {
-		fill: var(--fg);
 		font-size: 12px;
-		text-anchor: middle;
-	}
-	.figsvg .edge {
-		fill: none;
-		stroke: var(--accent);
-		stroke-width: 1.4;
-	}
-	.figsvg .edge.up {
-		stroke: var(--err);
-	}
-	.arrhead {
-		fill: var(--accent);
-	}
-	.arrhead-up {
-		fill: var(--err);
-	}
-	.pill {
-		fill: var(--custom-bg);
-		stroke: var(--fg);
-	}
-	.band {
-		fill: color-mix(in srgb, var(--accent) 8%, transparent);
-	}
-	svg .bandlabel {
-		fill: var(--dim);
-		font-size: 10px;
-		text-anchor: start;
 	}
 	.chip {
 		fill: var(--custom-bg);
@@ -631,36 +576,6 @@
 		fill: var(--purple);
 		font-size: 10px;
 	}
-	.cluster {
-		fill: color-mix(in srgb, var(--purple) 7%, transparent);
-		stroke: var(--muted);
-	}
-	svg .cltitle {
-		fill: var(--dim);
-		font-size: 11px;
-		text-anchor: start;
-	}
-	figcaption {
-		font-size: 0.9rem;
-		color: var(--dim);
-	}
-	figcaption b {
-		color: var(--fg);
-	}
-
-	.ghost {
-		font: inherit;
-		border: none;
-		background: none;
-		color: var(--cmd);
-		cursor: pointer;
-		padding: 0;
-	}
-	.ghost:disabled {
-		opacity: 0.35;
-		cursor: default;
-	}
-
 	.arcs {
 		user-select: none;
 		width: 100%;
@@ -688,64 +603,15 @@
 		font-size: 15px;
 		user-select: none;
 	}
-	.grab {
-		cursor: grab;
-	}
 	.grab.lift circle {
 		stroke: var(--accent);
 		stroke-width: 2;
 	}
-	.arcbar {
-		display: flex;
-		gap: 1.4rem;
-		align-items: baseline;
-		justify-content: center;
-		margin: 0.4rem 0 0;
-	}
-	.arcbar .good {
-		color: var(--accent);
-	}
-
-	.play {
-		display: grid;
-		grid-template-columns: minmax(16rem, 24rem) 1fr;
-		gap: 1rem;
-		align-items: start;
+	.grab:focus circle {
+		stroke: var(--accent);
+		stroke-width: 2;
 	}
 	.play-fig {
-		margin: 0;
 		height: 30rem;
-	}
-	.controls textarea {
-		width: 100%;
-		box-sizing: border-box;
-		font: inherit;
-		font-size: 0.9rem;
-		font-variant-ligatures: none;
-		background: var(--custom-bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 4px;
-		padding: 0.5rem;
-		resize: vertical;
-	}
-	.controls label {
-		display: flex;
-		gap: 0.6rem;
-		align-items: center;
-		margin-top: 0.5rem;
-	}
-	.controls select {
-		font: inherit;
-		font-size: 0.9rem;
-		background: var(--bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 3px;
-	}
-	@media (max-width: 52rem) {
-		.play {
-			grid-template-columns: 1fr;
-		}
 	}
 </style>

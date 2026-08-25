@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import ElkGrid from '$lib/learn/ElkGrid.svelte';
 	import Term from '$lib/learn/Term.svelte';
 
@@ -115,6 +115,17 @@
 	function drop() {
 		dragN = null;
 	}
+	function nodeKey(n: string, e: KeyboardEvent) {
+		if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+		e.preventDefault();
+		const row = order[layerOf[n]];
+		const i = row.indexOf(n);
+		const j = Math.max(0, Math.min(row.length - 1, i + (e.key === 'ArrowLeft' ? -1 : 1)));
+		if (i === j) return;
+		row.splice(i, 1);
+		row.splice(j, 0, n);
+		bcs = {};
+	}
 
 	// ---- playground -------------------------------------------------------
 	// Chosen so the thoroughness knob has visibly distinct steps (measured:
@@ -188,23 +199,20 @@ f --> i`;
 	</svg>
 {/snippet}
 
-<div class="page">
+<div class="lesson">
 	<p class="crumbs">
-		<a href="{base}/learn">learn</a> <span class="dim">/ crossing minimization</span>
+		<a href={resolve('/learn')}>learn</a> <span class="dim">/ crossing minimization</span>
 	</p>
 	<h1>Crossing minimization</h1>
 	<p class="lede">
-		<a href="{base}/learn/layering">Layering</a> settled the rows. What is left to decide
-		before anything gets coordinates is the <em>order</em> within each row — and that order
-		decides the crossings. Every edge crossing in a layered drawing is the product of two
-		choices made in this phase, one per layer. It is the last purely combinatorial step, and
-		the one where most of the readability is won or lost.
+		<a href={resolve('/learn/layering')}>Layering</a> fixed the rows. Crossing minimization orders
+		the nodes within each row before coordinates exist. Those orders determine which edges
+		cross, making this the last purely combinatorial phase.
 	</p>
 	<p>
-		Dummy nodes are in the game. A long edge has a dummy in every layer it passes through, and
-		each dummy gets ordered along with the real nodes of its layer. Order them badly and the
-		edge weaves across the drawing; order them well and it runs straight. We come back to
-		this.
+		Dummy nodes take part too. A long edge has a dummy in each intermediate layer, and every
+		dummy needs a position in that layer’s order. A poor order makes the edge weave across the
+		drawing; a good one lets it run nearly straight.
 	</p>
 	<Term name="crossing">
 		Two edges that run between the same pair of layers cross exactly when their endpoints are
@@ -213,26 +221,12 @@ f --> i`;
 		needed to count them.
 	</Term>
 
-	<h2>Counting is easy, choosing is not</h2>
+	<h2>Experiment: reorder the layers</h2>
 	<p>
-		With orders in hand, counting crossings is a loop over pairs of edges. Choosing the orders
-		is another matter: even the smallest version of the problem — two layers, one of them
-		frozen, find the order of the other that minimizes crossings — is NP-hard. A real drawing
-		has many layers and nothing frozen, so engines do what they did for cycle breaking: run a
-		heuristic and accept good enough.
-	</p>
-	<Term name="Eades & Wormald (1994)" href="https://doi.org/10.1007/BF01187020">
-		<em>Edge crossings in drawings of bipartite graphs</em> — proves one-sided crossing
-		minimization NP-hard and shows the median heuristic is within a factor of 3 of optimal.
-	</Term>
-
-	<h2>Try it</h2>
-	<p>
-		Three layers, nine nodes, and one long edge (<code>a → i</code>) whose dummy sits in the
-		middle row. Drag anything sideways — the dummy too, it is a node here. The declared order
-		costs 9 crossings; the minimum is 2. Find it, then let the heuristic try: <em>[sweep ↓]</em>
-		re-sorts rows 1 and 2 by the average position of their neighbours above,
-		<em>[sweep ↑]</em> does the same looking down. The badges show the averages it sorted by.
+		Drag nodes sideways within their rows; the dotted dummy can move too. The declared order
+		has nine crossings, while the minimum is two. After trying it by hand, run
+		<em>sweep ↓</em> or <em>sweep ↑</em>. A sweep sorts nodes by the average position of their
+		neighbours in the preceding row. The badges show those averages.
 	</p>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<svg
@@ -268,14 +262,20 @@ f --> i`;
 		{/each}
 		{#each order as row, r}
 			{#each row as n (n)}
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<g
 					class="grab"
 					class:lift={n === dragN}
+					role="slider"
+					tabindex="0"
+					aria-label="Position of {isDummy(n) ? 'dummy' : 'node'} {n}"
+					aria-valuemin="1"
+					aria-valuemax={row.length}
+					aria-valuenow={row.indexOf(n) + 1}
 					onpointerdown={(ev) => grab(n, ev)}
 					onpointermove={dragMove}
 					onpointerup={drop}
 					onpointercancel={drop}
+					onkeydown={(ev) => nodeKey(n, ev)}
 				>
 					{#if isDummy(n)}
 						<rect x={xOf(n) - 14} y={BY(r) - 12} width="28" height="24" rx="10" class="slot" />
@@ -297,26 +297,40 @@ f --> i`;
 			crossings: <b class:good={nCross === MIN_CROSS}>{nCross}</b>
 			<span class="dim">(minimum: {MIN_CROSS})</span>
 		</span>
-		<button class="ghost" onclick={() => sweep(true)}>[sweep ↓]</button>
-		<button class="ghost" onclick={() => sweep(false)}>[sweep ↑]</button>
-		<button class="ghost" onclick={() => setOrder(L)}>[declared order]</button>
+		<button class="ghost" onclick={() => sweep(true)}>sweep ↓</button>
+		<button class="ghost" onclick={() => sweep(false)}>sweep ↑</button>
+		<button class="ghost" onclick={() => setOrder(L)}>declared order</button>
 		<button
 			class="ghost"
 			onclick={() => setOrder(order.map((l) => [...l].sort(() => Math.random() - 0.5)))}
-			>[shuffle]</button
+			>shuffle</button
 		>
 	</div>
 
+	<h2>Counting is easy; choosing is hard</h2>
+	<p>
+		Once the orders are known, counting crossings is a comparison over pairs of edges.
+		Choosing the orders is harder. Even the one-sided problem—freeze one of two layers and
+		optimize the other—is NP-hard. Interactive engines therefore use fast heuristics and keep
+		the best order they find.
+	</p>
+	<Term name="Eades & Wormald (1994)" href="https://doi.org/10.1007/BF01187020">
+		<em>Edge crossings in drawings of bipartite graphs</em> — proves one-sided crossing
+		minimization NP-hard and shows the median heuristic is within a factor of 3 of optimal.
+	</Term>
+
 	<h2>The layer sweep</h2>
 	<p>
-		The standard heuristic takes the layers one pair at a time. Freeze the top layer. For each
-		node in the next layer, compute its <b>barycenter</b> — the average position of its
-		neighbours in the frozen layer — and sort the layer by it. That layer is now frozen; repeat
-		downward. At the bottom, turn around and sweep upward, sorting each layer by its neighbours
-		below. Keep alternating until an entire sweep changes nothing, or patience runs out. From
-		the declared order above, one sweep down reaches 3 crossings and the sweep back up reaches
-		the optimum — for this graph. Nothing guarantees that in general; the barycenter can settle
-		into orders that a single swap would improve.
+		The standard heuristic handles one adjacent pair of layers at a time. Freeze the top
+		layer. For each node below it, compute the average position of its neighbours above, then
+		sort by that value. Freeze the new order and continue downward. At the bottom, reverse
+		direction and repeat.
+	</p>
+	<p>
+		Engines alternate these sweeps until the order stops improving or an iteration limit is
+		reached. In the widget, one downward sweep reduces nine crossings to three; the upward
+		sweep reaches two. That success is specific to this graph. Barycenter sorting can stop at
+		a local optimum.
 	</p>
 	<Term name="barycenter">
 		The mean position of a node's neighbours in the adjacent, already-sorted layer. Sorting a
@@ -324,13 +338,11 @@ f --> i`;
 		tends to untangle edges without ever counting a crossing.
 	</Term>
 	<p>
-		Two refinements are standard. The <b>median</b> variant sorts by the median neighbour
-		position instead of the mean — less sensitive to one far-away neighbour, and the variant
-		with a provable bound. And after sweeping, a <b>transpose</b> pass walks each layer
-		swapping adjacent pairs whenever the swap reduces crossings, which catches exactly the
-		local mistakes the barycenter leaves behind. Engines run the whole thing several times
-		from different starting orders and keep the best; that count is the "thoroughness" knob
-		in the playground below.
+		Two refinements are common. The <b>median</b> variant uses the middle neighbour rather
+		than the mean, making one distant neighbour less influential. A <b>transpose</b> pass then
+		tests adjacent swaps and keeps any that reduce crossings. Engines may repeat the process
+		from several starting orders and retain the best result; the playground exposes that as
+		thoroughness.
 	</p>
 	<Term name="Sugiyama, Tagawa & Toda (1981)" href="https://doi.org/10.1109/TSMC.1981.4308636">
 		<em>Methods for visual understanding of hierarchical system structures</em> — the paper
@@ -359,20 +371,15 @@ f --> i`;
 		</figure>
 	</div>
 	<p>
-		The edge itself is the same in both drawings. What differs is where its dummy ended up in
-		the middle layer. On the left, the dummy is placed far to the right, so the edge has to
-		travel right to reach it and then back left to reach <code>i</code> — and every node and
-		edge it passes on the way out, it passes again on the way back: four of the nine
-		crossings come from that one misplaced dummy. On the right, the dummy sits directly between its
-		two ends and the edge runs almost straight.
+		The edge is unchanged; only its dummy moved. On the left, the dummy sits far to the right,
+		so the edge travels out and back. Four of the nine crossings come from that detour. On the
+		right, the dummy lies between the edge’s endpoints and the route is almost straight.
 	</p>
 	<p>
-		Now scale it up. A real diagram has a dozen long edges, several spanning three or four
-		layers, each with a dummy in every layer it crosses. Each dummy is one more item for the
-		sweep to order, and every one that lands far from its neighbours drags its edge on a
-		detour across the layer. The tangle that results is what people call spaghetti. It is
-		not caused by long edges as such — a long edge with well-placed dummies is just a
-		straight line — but by their dummies being ordered badly.
+		On a larger graph, every long edge contributes a dummy to each layer it crosses. A dummy
+		placed far from its neighbours pulls that edge across the layer. Long edges are not
+		inherently tangled—a well-ordered dummy chain is nearly straight—but they create more
+		opportunities for poor ordering.
 	</p>
 	<p>
 		Two conclusions follow. The sweep must treat dummies exactly like nodes — it does; the
@@ -410,15 +417,15 @@ f --> i`;
 		close (and how far) the cheap heuristics land.
 	</Term>
 	<p>
-		What ships is still the sweep — graphviz's <code>dot</code> with weighted medians, ELK with
-		barycenters and a greedy switch — because on ordinary diagrams it lands within a few
-		percent of optimal, and the remaining crossings rarely change how the drawing reads. The
-		bigger lever is the objective, not the solver. Counting every crossing as one is not a
-		model of readability: a crossing right next to a node hurts more than one in the middle
-		of a gap, a crossing on an important edge hurts more than one on a minor edge, and a
-		dummy chain that bends is often worse than an extra crossing. The engines that weight such
-		things — edge weights in <code>dot</code>, rigid chains in global sifting — buy more
-		legibility per millisecond than a better crossing counter does.
+		General-purpose engines still favour sweeps: Graphviz <code>dot</code> uses weighted
+		medians, while ELK offers barycenters plus greedy switching. They are fast enough to run
+		repeatedly and usually remove the obvious tangles.
+	</p>
+	<p>
+		Raw crossing count is only a proxy for readability. A crossing near a node can obscure
+		which port an edge uses; a crossing on a primary path may matter more than one on a minor
+		edge; and a badly bent dummy chain can be harder to follow than one additional crossing.
+		Edge weights and rigid dummy chains let an engine express some of those priorities.
 	</p>
 
 	<h2>Playground</h2>
@@ -466,105 +473,12 @@ f --> i`;
 		<li>Sifting, global sifting and exact integer programming all beat the sweep on crossings; the sweep ships because it is fast and close, and because crossings are not the whole of readability anyway.</li>
 	</ul>
 	<p class="dim">
-		Next: <a href="{base}/learn/node-placement">node placement</a> — turning orders into
+		Next: <a href={resolve('/learn/node-placement')}>node placement</a> — turning orders into
 		coordinates, and what straight dummy chains cost in width.
 	</p>
 </div>
 
 <style>
-	.page {
-		max-width: 52rem;
-		margin: 0 auto;
-		padding: 1.5rem 1rem 4rem;
-		line-height: 1.55;
-	}
-	.crumbs a,
-	a {
-		color: var(--cmd);
-	}
-	h1 {
-		font-size: 1.4rem;
-	}
-	h2 {
-		font-size: 1.1rem;
-		margin-top: 2.2rem;
-		color: var(--accent);
-	}
-	.lede {
-		font-size: 1.05rem;
-	}
-	.dim {
-		color: var(--dim);
-	}
-	code {
-		font-size: 0.92em;
-		background: var(--custom-bg);
-		border-radius: 3px;
-		padding: 0 0.25em;
-	}
-
-	.row {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1rem;
-		align-items: start;
-	}
-	@media (max-width: 40rem) {
-		.row {
-			grid-template-columns: 1fr;
-		}
-	}
-	.row figure {
-		margin: 0;
-	}
-	figcaption {
-		font-size: 0.9rem;
-		color: var(--dim);
-	}
-	figcaption b {
-		color: var(--fg);
-	}
-
-	.figsvg {
-		width: 100%;
-		max-width: 26rem;
-		display: block;
-		margin: 0 auto 0.4rem;
-	}
-	.figsvg text,
-	.arena text {
-		fill: var(--fg);
-		font-size: 13px;
-		text-anchor: middle;
-	}
-	.edge {
-		fill: none;
-		stroke: var(--accent);
-		stroke-width: 1.4;
-	}
-	.arrhead {
-		fill: var(--accent);
-	}
-	.pill {
-		fill: var(--custom-bg);
-		stroke: var(--fg);
-	}
-	.band {
-		fill: color-mix(in srgb, var(--accent) 8%, transparent);
-	}
-	svg .bandlabel {
-		fill: var(--dim);
-		font-size: 10px;
-		text-anchor: start;
-	}
-	.dummy {
-		fill: var(--dim);
-	}
-	.slot {
-		fill: none;
-		stroke: var(--muted);
-		stroke-dasharray: 3 3;
-	}
 	.chip {
 		fill: var(--custom-bg);
 		stroke: var(--purple);
@@ -572,91 +486,5 @@ f --> i`;
 	svg .chiptext {
 		fill: var(--purple);
 		font-size: 9px;
-	}
-
-	.arena {
-		user-select: none;
-		width: 100%;
-		max-width: 34rem;
-		display: block;
-		margin: 0 auto;
-		touch-action: none;
-	}
-	.grab {
-		cursor: grab;
-	}
-	/* The dummy slot is fill: none, so only its dashed outline and the dot
-	   would be grabbable; pointer-events: all makes the whole area hit. */
-	.grab .slot {
-		pointer-events: all;
-	}
-	.grab.lift .pill,
-	.grab.lift .slot {
-		stroke: var(--accent);
-		stroke-width: 2;
-	}
-	.grab text {
-		user-select: none;
-	}
-	.statbar {
-		display: flex;
-		gap: 1.4rem;
-		align-items: baseline;
-		justify-content: center;
-		margin: 0.4rem 0 0;
-	}
-	.statbar .good {
-		color: var(--accent);
-	}
-	.ghost {
-		font: inherit;
-		border: none;
-		background: none;
-		color: var(--cmd);
-		cursor: pointer;
-		padding: 0;
-	}
-
-	.play {
-		display: grid;
-		grid-template-columns: minmax(16rem, 24rem) 1fr;
-		gap: 1rem;
-		align-items: start;
-	}
-	.play-fig {
-		margin: 0;
-		min-width: 0;
-	}
-	.controls textarea {
-		width: 100%;
-		box-sizing: border-box;
-		font: inherit;
-		font-size: 0.9rem;
-		font-variant-ligatures: none;
-		background: var(--custom-bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 4px;
-		padding: 0.5rem;
-		resize: vertical;
-	}
-	.controls label {
-		display: flex;
-		gap: 0.6rem;
-		align-items: center;
-		margin-top: 0.5rem;
-	}
-	.controls select {
-		font: inherit;
-		font-size: 0.9rem;
-		background: var(--bg);
-		color: var(--fg);
-		border: 1px solid var(--muted);
-		border-radius: 3px;
-	}
-	@media (max-width: 52rem) {
-		.play {
-			grid-template-columns: 1fr;
-		}
 	}
 </style>

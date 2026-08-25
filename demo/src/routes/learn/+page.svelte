@@ -1,36 +1,36 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 
 	const topics = [
 		{
-			slug: 'drawing-graphs',
+			href: '/learn/drawing-graphs',
 			title: 'Drawing graphs',
 			blurb: 'what layout is, the algorithm families, why layered wins for directed graphs'
 		},
 		{
-			slug: 'cycle-breaking',
+			href: '/learn/cycle-breaking',
 			title: 'Cycle breaking',
 			blurb: 'why some arrows point the "wrong" way'
 		},
 		{
-			slug: 'layering',
+			href: '/learn/layering',
 			title: 'Layering',
 			blurb: 'rows, dummy nodes, and the hidden cost of long edges'
 		},
 		{
-			slug: 'crossing-minimization',
+			href: '/learn/crossing-minimization',
 			title: 'Crossing minimization',
 			blurb: 'ordering nodes within each layer'
 		},
 		{
-			slug: 'node-placement',
+			href: '/learn/node-placement',
 			title: 'Node placement',
 			blurb: 'turning orders into coordinates; the width-vs-straightness trade'
 		},
-		{ slug: null, title: 'Edge routing', blurb: 'channels, tracks, and orthogonal lines' },
-		{ slug: null, title: 'Compound graphs', blurb: 'nested boxes, border-crossing edges' },
-		{ slug: null, title: 'The terminal grid', blurb: 'from float coordinates to character cells' }
-	];
+		{ href: null, title: 'Edge routing', blurb: 'channels, tracks, and orthogonal lines' },
+		{ href: null, title: 'Compound graphs', blurb: 'nested boxes, border-crossing edges' },
+		{ href: null, title: 'The terminal grid', blurb: 'from float coordinates to character cells' }
+	] as const;
 </script>
 
 <svelte:head>
@@ -46,8 +46,8 @@
 	<ol start="0">
 		{#each topics as t}
 			<li>
-				{#if t.slug}
-					<a href="{base}/learn/{t.slug}">{t.title}</a>
+				{#if t.href}
+					<a href={resolve(t.href)}>{t.title}</a>
 					<span class="dim">— {t.blurb}</span>
 				{:else}
 					<span class="dim">{t.title} — {t.blurb} <em>(upcoming)</em></span>

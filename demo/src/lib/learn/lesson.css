@@ -1,0 +1,232 @@
+.learn .lesson {
+	--dim: color-mix(in srgb, var(--fg) 62%, var(--bg));
+	max-width: 52rem;
+	margin: 0 auto;
+	padding: 1.5rem 1rem 4rem;
+	font-size: 1rem;
+	line-height: 1.65;
+}
+
+.learn :where(.lesson a) {
+	color: var(--cmd);
+}
+
+.learn :where(.lesson h1) {
+	font-size: clamp(1.5rem, 4vw, 1.75rem);
+	line-height: 1.25;
+}
+
+.learn :where(.lesson h2) {
+	margin-top: 3rem;
+	color: var(--accent);
+	font-size: 1.25rem;
+}
+
+.learn :where(.lesson .lede) {
+	font-size: 1.08rem;
+}
+
+.learn :where(.lesson .dim) {
+	color: var(--dim);
+}
+
+.learn :where(.lesson code) {
+	padding: 0 0.25em;
+	border-radius: 3px;
+	background: var(--custom-bg);
+	font-size: 0.92em;
+}
+
+.learn :where(.lesson .row) {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1rem;
+	align-items: start;
+}
+
+.learn :where(.lesson .row figure) {
+	margin: 0;
+}
+
+.learn :where(.lesson figcaption) {
+	color: var(--dim);
+	font-size: 0.9rem;
+}
+
+.learn :where(.lesson figcaption b) {
+	color: var(--fg);
+}
+
+.learn :where(.lesson .figsvg) {
+	display: block;
+	width: 100%;
+	max-width: 26rem;
+	margin: 0 auto 0.4rem;
+}
+
+.learn :where(.lesson .figsvg text, .lesson .arena text) {
+	fill: var(--fg);
+	font-size: 13px;
+	text-anchor: middle;
+}
+
+.learn :where(.lesson .edge) {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 1.4;
+}
+
+.learn :where(.lesson .edge.up) {
+	stroke: var(--err);
+}
+
+.learn :where(.lesson .arrhead) {
+	fill: var(--accent);
+}
+
+.learn :where(.lesson .arrhead-up) {
+	fill: var(--err);
+}
+
+.learn :where(.lesson .pill) {
+	fill: var(--custom-bg);
+	stroke: var(--fg);
+}
+
+.learn :where(.lesson .band) {
+	fill: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.learn :where(.lesson svg .bandlabel) {
+	fill: var(--dim);
+	font-size: 10px;
+	text-anchor: start;
+}
+
+.learn :where(.lesson .dummy) {
+	fill: var(--dim);
+}
+
+.learn :where(.lesson .slot) {
+	fill: none;
+	stroke: var(--muted);
+	stroke-dasharray: 3 3;
+}
+
+.learn :where(.lesson .cluster) {
+	fill: color-mix(in srgb, var(--purple) 7%, transparent);
+	stroke: var(--muted);
+}
+
+.learn :where(.lesson svg .cltitle) {
+	fill: var(--dim);
+	font-size: 11px;
+	text-anchor: start;
+}
+
+.learn :where(.lesson .arena) {
+	user-select: none;
+	display: block;
+	width: 100%;
+	max-width: 34rem;
+	margin: 0 auto;
+	touch-action: none;
+}
+
+.learn :where(.lesson .grab) {
+	cursor: grab;
+}
+
+.learn :where(.lesson .grab .slot) {
+	/* Empty SVG slots need their interior to remain draggable. */
+	pointer-events: all;
+}
+
+.learn :where(.lesson .grab.lift .pill, .lesson .grab.lift .slot, .lesson .grab:focus .pill, .lesson .grab:focus .slot) {
+	stroke: var(--accent);
+	stroke-width: 2;
+}
+
+.learn :where(.lesson .grab text) {
+	user-select: none;
+}
+
+.learn :where(.lesson .statbar, .lesson .arcbar) {
+	display: flex;
+	gap: 1.4rem;
+	align-items: baseline;
+	justify-content: center;
+	margin: 0.4rem 0 0;
+}
+
+.learn :where(.lesson .statbar .good, .lesson .arcbar .good) {
+	color: var(--accent);
+}
+
+.learn :where(.lesson .ghost) {
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--cmd);
+	font: inherit;
+	cursor: pointer;
+}
+
+.learn :where(.lesson .ghost:disabled) {
+	cursor: default;
+	opacity: 0.35;
+}
+
+.learn :where(.lesson .play) {
+	display: grid;
+	grid-template-columns: minmax(16rem, 24rem) 1fr;
+	gap: 1rem;
+	align-items: start;
+}
+
+.learn :where(.lesson .play-fig) {
+	min-width: 0;
+	margin: 0;
+}
+
+.learn :where(.lesson .controls textarea) {
+	box-sizing: border-box;
+	width: 100%;
+	padding: 0.5rem;
+	border: 1px solid var(--muted);
+	border-radius: 4px;
+	background: var(--custom-bg);
+	color: var(--fg);
+	font: inherit;
+	font-size: 0.9rem;
+	font-variant-ligatures: none;
+	resize: vertical;
+}
+
+.learn :where(.lesson .controls label) {
+	display: flex;
+	gap: 0.6rem;
+	align-items: center;
+	margin-top: 0.5rem;
+}
+
+.learn :where(.lesson .controls select) {
+	border: 1px solid var(--muted);
+	border-radius: 3px;
+	background: var(--bg);
+	color: var(--fg);
+	font: inherit;
+	font-size: 0.9rem;
+}
+
+@media (max-width: 52rem) {
+	.learn :where(.lesson .play) {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (max-width: 40rem) {
+	.learn :where(.lesson .row) {
+		grid-template-columns: 1fr;
+	}
+}

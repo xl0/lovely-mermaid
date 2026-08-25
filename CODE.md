@@ -24,7 +24,9 @@ docs/layout-primer.md     field overview of graph layout/routing (for humans)
 docs/learn-plan.md        /learn lesson series roadmap + writing conventions
 demo/src/routes/          / (streaming demo), /render (renderer/ELK toggles +
                           ELK options dropdown), /examples (gallery over
-                          examples/*.mmd, per-card viewer), /learn (lessons)
+                          examples/*.mmd, per-card viewer), /learn (lessons;
+                          shared route layout imports `$lib/learn/lesson.css`,
+                          pages keep only widget-specific CSS)
 tools/                    repo-level dev tooling, not shipped
   width-oracle/           emits per-code-point widths from the unicode-width crate
 packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sibling)
