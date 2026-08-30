@@ -2,63 +2,103 @@
  * The layered layout engine: synchronous, dependency-free, integer
  * geometry in the caller's unit. Lays out flow-down internally and
  * transposes / mirrors the result for the other directions, so no phase
- * knows about direction. Each phase is a plain function over the working
- * graph; `trace` receives a snapshot after every one.
+ * knows about direction. Each phase is a pure function `graph → graph`
+ * (it clones its input), run in `PHASES` order; `opts.until` stops after
+ * any of them and `trace` receives a snapshot after import, after every
+ * phase that ran, and for some phases after their sub-steps.
  *
- * Skeleton status: every phase is the simplest thing that produces a
- * complete drawing. See docs/elk-layered.md ch. 8 for what each becomes.
+ * docs/elk-layered.md ch. 8 is the plan for each phase.
  */
 import { breakCycles } from './cycles.ts'
+import type { LGraph } from './graph.ts'
 import { buildGraph, toSnapshot } from './graph.ts'
 import { assignLayers, splitLongEdges } from './layering.ts'
-import { assignPorts, orderNodes } from './ordering.ts'
+import { orderNodes } from './ordering.ts'
 import { placeNodes } from './placement.ts'
 import { joinRoutes, placeLabels, routeEdges } from './routing.ts'
-import type { Dir, LayoutInput, LayoutResult, PlacedLabel, Pt, Rect, Trace } from './types.ts'
+import type {
+  Dir,
+  LayoutInput,
+  LayoutOptions,
+  LayoutResult,
+  Phase,
+  PlacedLabel,
+  Pt,
+  Rect,
+  Trace,
+} from './types.ts'
 
 export type { SEdge, SNode, Snapshot, SPort } from './snapshot.ts'
 export type {
+  CyclesOptions,
   Dir,
   InputEdge,
   InputLabel,
   InputNode,
+  LabelOptions,
+  LayeringOptions,
   LayoutInput,
+  LayoutOptions,
   LayoutResult,
+  OrderingOptions,
+  Phase,
   PlacedLabel,
+  PlacementOptions,
   Rect,
+  RoutingOptions,
   Spacing,
   Trace,
 } from './types.ts'
+export { PHASES } from './types.ts'
 
-export function layout(input: LayoutInput, trace?: Trace): LayoutResult {
+export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Trace): LayoutResult {
   const sideways = input.dir === 'right' || input.dir === 'left'
-  const g = buildGraph(
+  let g = buildGraph(
     sideways ? { ...input, nodes: input.nodes.map((n) => ({ ...n, w: n.h, h: n.w })) } : input,
   )
-  const snap = (title: string, ports = false): void => {
-    if (trace !== undefined) trace(toSnapshot(g, title, ports))
+  const steps: [Phase, (g: LGraph) => LGraph][] = [
+    ['cycles', (g) => breakCycles(g, opts.cycles ?? {})],
+    ['layers', (g) => assignLayers(g, opts.layering ?? {})],
+    ['split', splitLongEdges],
+    [
+      'order',
+      (g) =>
+        orderNodes(g, opts.ordering ?? {}, (h, note) => {
+          if (trace !== undefined) trace(toSnapshot(h, `order · ${note}`))
+        }),
+    ],
+    [
+      'place',
+      (g) =>
+        placeNodes(g, opts.placement ?? {}, (h, note) => {
+          if (trace !== undefined) trace(toSnapshot(h, `place · ${note}`))
+        }),
+    ],
+    ['route', (g) => routeEdges(g, opts.routing ?? {})],
+    ['labels', (g) => placeLabels(g, opts.labels ?? {})],
+  ]
+  if (trace !== undefined) trace(toSnapshot(g, 'import'))
+  for (const [name, run] of steps) {
+    g = run(g)
+    if (trace !== undefined) trace(toSnapshot(g, name))
+    if (opts.until === name) break
   }
-  snap('import')
-  breakCycles(g)
-  snap('cycles')
-  assignLayers(g)
-  snap('layers')
-  splitLongEdges(g)
-  snap('split')
-  orderNodes(g)
-  assignPorts(g)
-  snap('order', true)
-  placeNodes(g)
-  snap('place', true)
-  const { width, height } = routeEdges(g)
-  const routes = joinRoutes(g)
-  const labels = placeLabels(g, routes)
-  snap('route', true)
 
-  const result: LayoutResult = { width, height, nodes: {}, edges: {}, warnings: g.warnings }
-  for (const n of g.nodes)
-    if (n.kind === 'node') result.nodes[n.id] = { x: n.x, y: n.y, w: n.w, h: n.h }
-  for (const [id, route] of routes) result.edges[id] = { route, labels: labels.get(id) ?? [] }
+  const result: LayoutResult = { width: 0, height: 0, nodes: {}, edges: {}, warnings: g.warnings }
+  for (const n of g.nodes) {
+    if (n.kind !== 'node' || n.x < 0 || n.y < 0) continue
+    result.nodes[n.id] = { x: n.x, y: n.y, w: n.w, h: n.h }
+    result.width = Math.max(result.width, n.x + n.w)
+    result.height = Math.max(result.height, n.y + n.h)
+  }
+  const placed = new Map(g.edges.map((e) => [e.id, e.placed]))
+  for (const [id, route] of joinRoutes(g)) {
+    result.edges[id] = { route, labels: placed.get(id) ?? [] }
+    for (const [x, y] of route) {
+      result.width = Math.max(result.width, x + 1)
+      result.height = Math.max(result.height, y + 1)
+    }
+  }
   return input.dir === 'down' ? result : transform(result, input.dir)
 }
 

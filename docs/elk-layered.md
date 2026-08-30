@@ -4424,6 +4424,17 @@ LGraph { nodes, edges, layers: LNode[][], dir, parent?: LNode }
 
 ### Compound graphs (6)
 
+> **Superseded 2026-08-30.** After weighing cross-frame optimality, the
+> engine goes the other way: one **global** layout in the Sander/dagre
+> lineage — frames are constraints, not nodes. Subgraphs contribute
+> top/bottom border nodes with minimum-length nesting edges (layering),
+> a contiguous block per frame (ordering), and 1-cell left/right border
+> dummies per spanned layer (placement); routing is unchanged. It keeps
+> the pipeline flat and makes cross-frame edges short; the cost is shared
+> layer bands across frames. Only the closed-subgraph `direction` rule
+> below survives. The recursive hybrid is kept here as the record of the
+> alternative and its pitfalls (chapter 6 §11).
+
 The hybrid, in order:
 
 1. Break cycles **globally on the flat leaf graph** first (we already do

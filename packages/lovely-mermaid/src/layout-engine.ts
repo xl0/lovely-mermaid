@@ -4,9 +4,9 @@
  * geometry painted onto a `Canvas` with the existing box / edge drawing.
  * Direction is finished by the engine, so nothing here flips a canvas.
  *
- * Skeleton status: subgraphs are ignored (their nodes lay out flat), head
- * and tail labels (cardinalities) are measured but not placed yet, and
- * styles are not applied. Not exported from the package index.
+ * Status: subgraphs are ignored (their nodes lay out flat), head and tail
+ * labels (cardinalities) are measured but not placed yet, and styles are
+ * not applied. Not exported from the package index.
  */
 import { Canvas, D, drawTextOverEdges, L, R, STY_DOT, STY_SOLID, STY_THICK, U } from './canvas.ts'
 import { parseClass } from './diagrams/class.ts'
@@ -15,14 +15,25 @@ import { parseGraph } from './diagrams/flowchart.ts'
 import { parseState } from './diagrams/state.ts'
 import { layout } from './engine/index.ts'
 import type { Snapshot } from './engine/snapshot.ts'
-import type { InputLabel, LayoutInput, LayoutResult, Pt, Spacing, Trace } from './engine/types.ts'
+import type {
+  InputLabel,
+  LayoutInput,
+  LayoutOptions,
+  LayoutResult,
+  Pt,
+  Spacing,
+  Trace,
+} from './engine/types.ts'
 import type { Graph } from './graph.ts'
 import { fitLabel, MAX_LABEL, MAX_LINES, stripControls, WRAP_WIDTH, wrapLabel } from './labels.ts'
 import { drawBox, drawClassBox, half, headGlyph, MAX_CANVAS_CELLS, sat } from './layout.ts'
 import type { MermaidArt } from './types.ts'
 import { stringWidth } from './width.ts'
 
+export { layout } from './engine/index.ts'
 export type { Pt, SEdge, SNode, Snapshot, SPort } from './engine/snapshot.ts'
+export type { LayoutInput, LayoutOptions, Phase } from './engine/types.ts'
+export { PHASES } from './engine/types.ts'
 
 /**
  * Cell gaps in the engine's cross axis: columns between boxes in a row for
@@ -44,9 +55,14 @@ export function importGraph(graph: Graph): { input: LayoutInput; lines: string[]
       const w = Math.max(1, ...n.sections.flat().map(stringWidth)) + 4
       const filled = n.sections.filter((s) => s.length > 0).length
       const h = n.sections.reduce((s, sec) => s + sec.length, 0) + sat(filled, 1) + 2
-      return { id: `n${i}`, w, h }
+      return { id: `n${i}`, label: n.label, w, h }
     }
-    return { id: `n${i}`, w: Math.max(1, ...lines[i].map(stringWidth)) + 4, h: lines[i].length + 2 }
+    return {
+      id: `n${i}`,
+      label: lines[i].join('\n'),
+      w: Math.max(1, ...lines[i].map(stringWidth)) + 4,
+      h: lines[i].length + 2,
+    }
   })
   const measure = (text: string, at: InputLabel['at']): InputLabel => {
     const t = fitLabel(text, MAX_LABEL)
@@ -62,9 +78,10 @@ export function importGraph(graph: Graph): { input: LayoutInput; lines: string[]
   return { input: { dir: graph.dir, nodes, edges, spacing: SPACING[graph.dir] }, lines }
 }
 
-/** Paint the engine's geometry; `null` when the canvas would exceed the cap. */
+/** Paint the engine's geometry; `null` when there is none, or when the
+ * canvas would exceed the cap. */
 export function drawLayout(graph: Graph, res: LayoutResult, lines: string[][]): Canvas | null {
-  if (res.width * res.height > MAX_CANVAS_CELLS) return null
+  if (res.width === 0 || res.height === 0 || res.width * res.height > MAX_CANVAS_CELLS) return null
   const canvas = new Canvas(res.width, res.height)
   graph.nodes.forEach((n, i) => {
     const r = res.nodes[`n${i}`]
@@ -122,12 +139,26 @@ function parse(src: string): Graph | null {
   return parseGraph(s) ?? parseState(s) ?? parseClass(s) ?? parseEr(s)
 }
 
-/** Parse, lay out and paint; `trace` sees the engine's phase snapshots. */
-export function renderEngine(src: string, trace?: Trace): MermaidArt | null {
+/** The half of `renderEngine` before layout: source → engine input. The lab
+ * keeps the input and re-runs `layout` on it as options change. */
+export function prepare(
+  src: string,
+): { graph: Graph; input: LayoutInput; lines: string[][] } | null {
   const graph = parse(src)
   if (graph === null) return null
-  const { input, lines } = importGraph(graph)
-  const res = layout(input, trace)
+  return { graph, ...importGraph(graph) }
+}
+
+/** Parse, lay out and paint; `trace` sees the engine's phase snapshots. */
+export function renderEngine(
+  src: string,
+  opts: LayoutOptions = {},
+  trace?: Trace,
+): MermaidArt | null {
+  const p = prepare(src)
+  if (p === null) return null
+  const { graph, input, lines } = p
+  const res = layout(input, opts, trace)
   const canvas = drawLayout(graph, res, lines)
   if (canvas === null) return null
   return {
@@ -138,8 +169,11 @@ export function renderEngine(src: string, trace?: Trace): MermaidArt | null {
 }
 
 /** The lab's entry point: every phase snapshot plus the finished art. */
-export function traceEngine(src: string): { snapshots: Snapshot[]; art: MermaidArt | null } {
+export function traceEngine(
+  src: string,
+  opts: LayoutOptions = {},
+): { snapshots: Snapshot[]; art: MermaidArt | null } {
   const snapshots: Snapshot[] = []
-  const art = renderEngine(src, (s) => snapshots.push(s))
+  const art = renderEngine(src, opts, (s) => snapshots.push(s))
   return { snapshots, art }
 }

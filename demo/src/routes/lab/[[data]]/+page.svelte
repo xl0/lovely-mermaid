@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { packHash, unpackHash } from '$lib/hash';
 	import Editor from '$lib/lab/Editor.svelte';
+	import Options from '$lib/lab/Options.svelte';
 	import type { Sel } from '$lib/lab/ranges';
 	import {
 		formatSnapshot,
@@ -14,10 +15,13 @@
 		type SPort
 	} from '$lib/lab/snapshot';
 	import { DEFAULT_VIEW, type Rendered, snapshotSvg, type View } from '$lib/lab/snapshot-svg';
+	import { type LayoutInput, type LayoutOptions, layout, prepare } from 'lovely-mermaid-engine';
 
-	// The layout lab: a mermaid source goes through the engine, every phase
-	// snapshot is listed, the chosen one lands in the editor (editable), and
-	// the picture follows the editor. State lives in the URL (/lab/<data>).
+	// The layout lab: [generate] parses the mermaid source into the engine's
+	// input; from then on the engine re-runs live whenever an option changes,
+	// every phase snapshot is listed, the chosen one lands in the editor
+	// (editable — an option change rewrites it), and the picture follows the
+	// editor. Source, options, JSON and view live in the URL (/lab/<data>).
 	const DEFAULT_SRC = `flowchart TD
   Start --> Parse --> Check
   Parse --> Build
@@ -29,17 +33,47 @@
   Ship --> Parse
 `;
 	let src = $state(DEFAULT_SRC);
+	let opts = $state<LayoutOptions>({});
+	let input = $state<LayoutInput | null>(null);
+	let parseWarnings = $state<string[]>([]);
 	let text = $state('{\n  "nodes": [],\n  "edges": []\n}\n');
 	let view = $state<View>({ ...DEFAULT_VIEW });
-	let phases = $state<Snapshot[]>([]);
+	// Snapshots grouped by phase: a title `order · sweep 1.2 ↑ · …` is a
+	// sub-step of `order`; the plain `order` snapshot closes the group as its
+	// result. `phase` selects a group, `step` an entry in it.
+	interface Group {
+		name: string;
+		steps: Snapshot[];
+	}
+	function groupSnapshots(snaps: Snapshot[]): Group[] {
+		const groups: Group[] = [];
+		for (const snap of snaps) {
+			const name = (snap.title ?? '').split(' · ')[0];
+			let g = groups[groups.length - 1];
+			if (g === undefined || g.name !== name) {
+				g = { name, steps: [] };
+				groups.push(g);
+			}
+			g.steps.push(snap);
+		}
+		return groups;
+	}
+	let groups = $state<Group[]>([]);
 	let phase = $state(-1);
+	let step = $state(0);
 	let genErr = $state('');
 	let loaded = $state(!page.params.data);
 	if (page.params.data) {
 		unpackHash(page.params.data)
 			.then((s) => {
-				const o = JSON.parse(s) as { src?: string; text: string; view: Partial<View> };
+				const o = JSON.parse(s) as {
+					src?: string;
+					opts?: LayoutOptions;
+					text: string;
+					view: Partial<View>;
+				};
 				src = o.src ?? DEFAULT_SRC;
+				opts = typeof o.opts === 'object' && o.opts !== null ? o.opts : {};
 				text = o.text;
 				view = { ...DEFAULT_VIEW, ...o.view };
 			})
@@ -49,7 +83,7 @@
 	}
 	let writeSeq = 0;
 	$effect(() => {
-		const s = JSON.stringify({ src, text, view });
+		const s = JSON.stringify({ src, opts, text, view });
 		if (!loaded) return;
 		const seq = ++writeSeq;
 		const t = setTimeout(() => {
@@ -60,22 +94,50 @@
 		return () => clearTimeout(t);
 	});
 
-	async function generate() {
+	function generate() {
+		const p = prepare(src);
+		if (p === null) {
+			input = null;
+			groups = [];
+			genErr = 'nothing parsed: unsupported or empty diagram';
+			return;
+		}
+		parseWarnings = p.graph.warnings;
+		input = p.input;
+	}
+	// The engine runs whenever the input or any option changes.
+	$effect(() => {
+		const inp = $state.snapshot(input);
+		const o = $state.snapshot(opts);
+		if (inp === null) return;
 		try {
-			const { traceEngine } = await import('lovely-mermaid-engine');
-			const { snapshots, art } = traceEngine(src);
-			phases = snapshots;
-			genErr = art === null ? 'nothing rendered: unsupported or empty diagram' : art.warnings.join('; ');
-			if (snapshots.length) show(snapshots.length - 1);
+			const snaps: Snapshot[] = [];
+			const res = layout(inp, o, (s) => snaps.push(s));
+			const next = groupSnapshots(snaps);
+			groups = next;
+			genErr = [...parseWarnings, ...res.warnings].join('; ');
+			// keep the selected phase when it still exists, at its result
+			untrack(() => {
+				const i = phase >= 0 && phase < next.length ? phase : next.length - 1;
+				show(i, next[i].steps.length - 1);
+			});
 		} catch (e) {
 			genErr = e instanceof Error ? e.message : String(e);
 		}
-	}
-	function show(i: number) {
+	});
+	function show(i: number, k: number) {
+		const g = groups[i];
+		if (g === undefined) return;
 		phase = i;
-		const s = phases[i];
-		if (s) text = formatSnapshot(s);
+		step = Math.max(0, Math.min(g.steps.length - 1, k));
+		text = formatSnapshot(g.steps[step]);
 	}
+	const current = $derived(groups[phase]);
+	const stepNote = $derived.by(() => {
+		if (current === undefined) return '';
+		if (step === current.steps.length - 1) return 'result';
+		return (current.steps[step].title ?? '').split(' · ').slice(1).join(' · ');
+	});
 
 	type Result = Rendered & { snap: Snapshot };
 	const attempt = $derived.by((): { ok: Result } | { error: string } => {
@@ -114,6 +176,7 @@
 	}
 	let drag: { x: number; y: number; tx: number; ty: number; target: Element } | null = null;
 	function onDown(e: PointerEvent) {
+		e.preventDefault(); // no text selection while panning over SVG text
 		drag = { x: e.clientX, y: e.clientY, tx, ty, target: e.target as Element };
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 	}
@@ -244,18 +307,36 @@
 	<aside>
 		<h1><span class="accent">lovely-mermaid</span> <span class="dim">/ lab</span></h1>
 		<textarea class="src" bind:value={src} spellcheck="false" aria-label="Mermaid source"></textarea>
+		<Options bind:value={opts} />
 		<div class="row wrap">
 			<button class="ghost" onclick={generate}>[generate]</button>
-			{#each phases as p, i}
-				<button class="ghost" class:active={i === phase} onclick={() => show(i)}>{p.title}</button>
+			{#each groups as g, i}
+				<button class="ghost" class:active={i === phase} onclick={() => show(i, g.steps.length - 1)}>
+					{g.name}{#if g.steps.length > 1}<sup>{g.steps.length - 1}</sup>{/if}
+				</button>
 			{/each}
 		</div>
+		{#if current !== undefined && current.steps.length > 1}
+			<div class="row steps">
+				<button class="ghost" disabled={step === 0} onclick={() => show(phase, step - 1)}>[‹]</button>
+				<input
+					type="range"
+					min="0"
+					max={current.steps.length - 1}
+					value={step}
+					oninput={(e) => show(phase, Number(e.currentTarget.value))}
+				/>
+				<button class="ghost" disabled={step === current.steps.length - 1} onclick={() => show(phase, step + 1)}>[›]</button>
+				<span class="dim note">{step + 1}/{current.steps.length} · {stepNote}</span>
+			</div>
+		{/if}
 		{#if genErr}<p class="warn">{genErr}</p>{/if}
 		<div class="row view">
 			<label>sx <input type="number" min="1" bind:value={view.sx} /></label>
 			<label>sy <input type="number" min="1" bind:value={view.sy} /></label>
 			<label>gapX <input type="number" min="0" bind:value={view.gapX} /></label>
 			<label>gapY <input type="number" min="0" bind:value={view.gapY} /></label>
+			<label>grid <input type="checkbox" bind:checked={view.grid} /></label>
 			<button class="ghost" onclick={() => navigator.clipboard.writeText(location.href)}>[copy link]</button>
 		</div>
 		<Editor bind:value={text} bind:this={editor} onCaret={(s) => (caret = s)} />
@@ -381,6 +462,26 @@
 	button.active {
 		color: var(--gold);
 	}
+	button:disabled {
+		color: var(--muted);
+		cursor: default;
+	}
+	sup {
+		color: var(--dim);
+		font-size: 0.7em;
+	}
+	.steps input[type='range'] {
+		flex: none;
+		width: 9rem;
+		accent-color: var(--accent);
+	}
+	.steps .note {
+		flex: 1;
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
 	.err,
 	.warn {
 		color: var(--err);
@@ -400,6 +501,7 @@
 		background: var(--term-bg);
 		cursor: grab;
 		touch-action: none;
+		user-select: none;
 	}
 	.content {
 		position: absolute;

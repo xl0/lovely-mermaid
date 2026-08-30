@@ -137,18 +137,29 @@ visualization comes first and every phase must be viewable.
       compound hybrid, options, corrections to older notes) and the
       reading order per milestone — start there.
 - [x] Engine skeleton (2026-08-30): `src/engine/` with the working model,
-      trace, all phases as naive placeholders, direction transform;
+      trace, `until` + per-phase options, all phases as pass-throughs,
+      direction transform;
       `layout-engine.ts` bridge (Graph in, Canvas out); the lab runs
       mermaid source through it with a phase stepper. Decided with it:
       an outer candidate loop scoring the *real* cost (width, crossings,
       label failures) will wrap the tail phases — keep every phase pure.
 - [ ] Corpus stats table (ours vs elkjs) once ordering exists.
-- [ ] Phases, each landing in the lab with a strategy A/B: cycles +
-      layering (longest path, then network simplex) + dummy chains;
-      ordering (barycenter sweeps, one snapshot per sweep); placement
-      (linear segments, then Brandes–Köpf in integers); routing (ports,
-      channel tracks, y from track counts, self-loops, feedback lanes)
-      + labels; compound (recursive with port dummies — to be decided).
+- [x] cycles (greedy ELS, deterministic ties; `dfs` alternative), layers
+      (network simplex with weight/minLen, balancing; `longestPath`
+      alternative), order (port-rank sweep, deterministic restarts,
+      greedy switch, port cells; sub-step snapshots) and place
+      (Brandes–Köpf in integers, narrowest of four; network-simplex placer
+      on the shared simplex core) and route (trunks per source cell,
+      crossing-cost dependencies, X-splitting, tracks → band rows), all
+      live in the lab; the bridge renders real terminal output; phases
+      are pure `graph → graph`. 2026-08-30.
+- [ ] Phases still to land, each with a strategy A/B in the lab:
+      routing extras (self-loops, port capacity → merged cells / wider
+      nodes, y
+      from track counts, self-loops) + labels; compound = **global**
+      (border nodes + nesting edges in layering, contiguous blocks in
+      ordering, border dummies in placement) — decided over the recursive
+      ELK scheme for cross-frame optimality; see CODE.md.
 - [ ] Switch-over: registry routes flowchart/state/class/ER through the
       engine, goldens regenerated, `layout.ts` shrinks to draw fns,
       `layout-elk.ts` deleted.
@@ -160,11 +171,10 @@ self-loops); reversed edges stay on the flow sides too, so a down edge
 and its return run side by side (no E/W special case).
 
 Decided by the ELK dive (details in `docs/elk-layered.md` ch. 8): labels
-post-hoc on the line (never label dummies); compound = hybrid (global
-cycle breaking, per-level segments with border-cell dummies in hidden
-first/last layers, bottom-up sizes, no hierarchical sweep, flow-aligned
-exits only); routing assigns layer positions; BK picks the smallest of
-four layouts; no RNG. Still deferred: network simplex timing, package split.
+post-hoc on the line (never label dummies); routing assigns layer
+positions; BK picks the smallest of four layouts; no RNG. Compound
+handling was re-decided afterwards as one global layout (see CODE.md),
+replacing ch. 8's recursive hybrid. Still deferred: package split.
 
 ## Open questions
 

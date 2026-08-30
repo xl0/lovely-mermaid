@@ -17,6 +17,8 @@ export type Pt = [number, number]
 
 export interface InputNode {
   id: string
+  /** shown by the lab instead of the id; layout never reads it */
+  label?: string
   w: number
   h: number
 }
@@ -56,6 +58,45 @@ export interface LayoutInput {
   spacing: Spacing
 }
 
+/** The phases, in pipeline order; also the snapshot titles. */
+export const PHASES = ['cycles', 'layers', 'split', 'order', 'place', 'route', 'labels'] as const
+export type Phase = (typeof PHASES)[number]
+
+// Per-phase knobs. The demo's lab mirrors these in its option controls
+// (demo/src/lib/lab/Options.svelte) — keep the two in sync.
+export interface CyclesOptions {
+  strategy?: 'greedy' | 'dfs'
+}
+export interface LayeringOptions {
+  strategy?: 'networkSimplex' | 'longestPath'
+}
+export interface OrderingOptions {
+  /** `none` keeps declaration order (ports still get cells) */
+  strategy?: 'sweep' | 'none'
+  /** deterministic restart variants to keep the best of, 1..4 */
+  thoroughness?: number
+  /** adjacent-swap polish after the sweeps */
+  greedySwitch?: boolean
+}
+export interface PlacementOptions {
+  strategy?: 'bk' | 'networkSimplex'
+}
+/** no knobs yet */
+export type RoutingOptions = Record<string, never>
+export type LabelOptions = Record<string, never>
+
+export interface LayoutOptions {
+  /** Stop after this phase; later ones do not run and the result carries
+   * whatever geometry exists (usually none). */
+  until?: Phase
+  cycles?: CyclesOptions
+  layering?: LayeringOptions
+  ordering?: OrderingOptions
+  placement?: PlacementOptions
+  routing?: RoutingOptions
+  labels?: LabelOptions
+}
+
 export interface PlacedLabel extends Rect {
   text: string
 }
@@ -63,13 +104,13 @@ export interface PlacedLabel extends Rect {
 export interface LayoutResult {
   width: number
   height: number
-  /** Node rectangles, absolute, in the requested direction. */
+  /** Rectangles of the nodes that were placed, absolute, in the requested direction. */
   nodes: Record<string, Rect>
-  /** Per input edge: the polyline from source to target, port cell to port
-   * cell, plus every label the engine found room for. */
+  /** Per input edge that was routed: the polyline from source to target,
+   * port cell to port cell, plus every label the engine found room for. */
   edges: Record<string, { route: Pt[]; labels: PlacedLabel[] }>
   warnings: string[]
 }
 
-/** Receives one snapshot after each phase, in the engine's internal frame. */
+/** Receives one snapshot after import and after each phase, in the engine's internal frame. */
 export type Trace = (snapshot: Snapshot) => void

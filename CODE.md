@@ -79,8 +79,9 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
                           types.ts (LayoutInput/LayoutResult/Trace), snapshot.ts (the
                           lab's picture format), graph.ts (working model + import +
                           toSnapshot), cycles.ts, layering.ts, ordering.ts,
-                          placement.ts, routing.ts, index.ts (layout(): the phases in
-                          order, direction transform, export)
+                          placement.ts, routing.ts, simplex.ts (network simplex core
+                          shared by layering and placement), index.ts (layout(): the
+                          phases in order, direction transform, export)
     layout-engine.ts      the mermaid bridge: Graph -> LayoutInput (cells, measured
                           labels), LayoutResult -> Canvas; renderEngine / traceEngine.
                           Not in the package index; the demo aliases it as
@@ -93,11 +94,20 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
 
 `src/engine/` is a generic layered engine: synchronous, dependency-free,
 integer geometry in whatever unit the caller's sizes use. `layout(input,
-trace?)` runs the phases in order on one working graph (`graph.ts`: every
+opts?, trace?)` runs the phases in order, each a pure function `graph →
+graph` that clones its input (`cloneGraph` = `structuredClone`, which keeps
+the ports ↔ nodes ↔ edges references intact) and works on the clone — so
+the candidate loop and the lab's edit-and-continue can branch from any
+state, and the tests deep-freeze inputs to enforce it — on one working
+graph (`graph.ts`: every
 edge end is a port, long-edge dummies are real 1×0 nodes with ports, a
 reversed edge is stored in layout direction with a flag, `-1` = not yet
 assigned): cycles → layers → split → order (+ port sides, order, cells) →
-place (cross axis) → route. **Routing assigns the flow-axis coordinates**
+place (cross axis) → route → labels; `opts.until` stops after any of them,
+and each phase takes its own option bag (`LayoutOptions`, plain
+interfaces). The lab's `Options.svelte` hard-codes a mirror of those
+knobs for its controls — a new knob is added in both places. **Routing
+assigns the flow-axis coordinates**
 (band tops from track counts; a channel is `tracks + 2·channelGap` rows or
 one row when every edge is straight); `joinRoutes` concatenates a split
 edge's segments and reads a reversed one backwards; labels are placed
@@ -106,11 +116,64 @@ mirrors the result for the other directions — sizes are transposed on the
 way in for LR/RL — so no phase and no drawer ever flips anything. `trace`
 receives a Snapshot after every phase, in the engine's frame.
 
-Skeleton status (2026-08-30): every phase is the simplest complete
-implementation (DFS cycle breaking, longest-path layering, declaration
-order, packed placement, one track per jogging edge, naive labels);
-self-loops are skipped with a warning; `docs/elk-layered.md` ch. 8 lists
-what each becomes.
+Status (2026-08-30): **cycles** — greedy Eades–Lin–Smyth as ELK runs it
+(sinks right, sources left, else max out−in, each edge discounted once)
+with declaration-order ties instead of random, plus the `dfs` back-edge
+strategy; `reverse()` swaps the edge's ends and toggles the flag, ports
+stay on their nodes. **layers** — Gansner network simplex (longest-path
+start, tight tree by min-slack pulls, cut values by leaf peeling, first
+negative tree edge leaves, min-slack head→tail edge enters, cap
+`28·√n` pivots, normalize, Gansner balancing with a filling count shared
+across components) over per-edge `weight` and `minLen`; `longestPath` is
+the start alone; verified against brute force on random small DAGs.
+**order** — ELK's layer sweep over port ranks without its randomness:
+a free layer sorts by the barycenter (integer ratio) of the port ranks it
+reaches in the fixed neighbour, its facing ports sort by those ranks, then
+the fixed side's facing ports re-sort by where they land; sweeps alternate
+while the exact Fenwick-tree crossing count improves (a losing sweep is
+undone); `thoroughness` picks among four deterministic variants (first
+direction × reversed input), declaration order always variant one; a
+two-sided greedy switch polishes; then every port gets a border cell
+(`portCell`: spread over `1..w-2`, centre for one, cells shared when a
+side is over capacity — the router treats a shared cell as one trunk).
+Sub-steps are traced (`order · sweep 1.2 ↑ · 3 crossings`). **place** —
+Brandes–Köpf as ELK runs it, in integers: type-1 conflicts marked, four
+variants (upper/lower median neighbours × packed left/right), blocks made
+straight at the **port cells** (inside-block shift), compaction with the
+class-graph shift propagation (not the paper's `min` recurrence), the
+narrowest valid candidate kept (ELK's default with orthogonal routing —
+no balancing); `networkSimplex` builds ELK's auxiliary graph (one aux node
+per edge hanging below both ends, weights 4/8/32, in-layer chains with
+width + gap as minimum length) and solves it with the shared
+`simplex.ts` core, which the layering also uses (`nsSolve`: components,
+tight tree, cut values, pivots, normalize, optional balancing). Each
+candidate is traced (`place · upper medians, packed left · width 42`).
+**route** — ELK's orthogonal channel router in cells (ch. 5): per
+channel, a *trunk* per source cell (a fan-out bus; edges into one cell
+merge in its column instead — fusing by target too would join unrelated
+sources), stub → trunk row → stub; trunks with overlapping extents get a
+dependency towards fewer stub/trunk crossings, an order in which two
+stubs would run down the same column is forbidden, and a pair forbidden
+both ways (the X) splits one trunk into two joined by a jog through a
+free column, as ELK does; greedy FAS over the dependencies, tracks by
+longest path, straight edges take no track; channel height = tracks + 2
+gap rows (one row when everything is straight, for the arrowhead); band
+tops follow; a dummy spans its band. **labels** is still a pass-through.
+Self-loops are skipped at import with a warning. `docs/elk-layered.md`
+ch. 8 lists what remains.
+
+Compound graphs (decided 2026-08-30, superseding the dive's ch. 6/8
+recommendation): **one global layout**, Sander/dagre style — frames are
+constraints, not nodes. Each subgraph contributes top/bottom border nodes
+with nesting edges of minimum length (the layering already takes
+`minLen`), members form a contiguous block in ordering, left/right border
+dummies (1 cell — the border column) in placement, frame = bounding box of
+its borders; routing is unchanged. Cross-frame edges stay short and
+straight, the pipeline stays flat (one graph, one snapshot per phase).
+Cost accepted: layer bands are shared across frames. A subgraph with a
+`direction` override and no crossing edges is laid out on its own and
+becomes an opaque node. Titles may be pierced: the tee keeps its glyph
+under the letters and the colour tells the edge.
 
 The bridge (`layout-engine.ts`) measures nodes from wrapped labels /
 compartments (no even-width forcing), turns `cardFrom`/`cardTo` into tail /
@@ -133,8 +196,12 @@ per occupant, dummies included), no port `pos` → the side's ports spread
 evenly, no `route` → a straight line between ports or facing sides. `snapshotSvg(snap, view)` is one pure function returning an
 SVG string plus stats (nodes, dummies, layers, crossings between adjacent
 layers, extent) and invariant warnings (edges not pointing down, overlaps);
-`/lab/[[data]]` takes a mermaid source, runs `traceEngine` on
-[generate], lists the phase snapshots as buttons, loads the chosen one into
+`/lab/[[data]]` takes a mermaid source and engine options (one control
+per knob, plus `until`); [generate] runs `prepare`
+(source → engine input) once, and an effect re-runs `layout` on that
+input whenever an option changes — a hand edit of the JSON is rewritten
+by the next option change, by design. It lists the phase snapshots as
+buttons, loads the chosen one into
 the editor (still hand-editable), and draws whatever the editor holds with
 pan/zoom and hover inspection (edges of the hovered node light up via CSS
 over inline attributes); source, JSON and view are packed into the URL

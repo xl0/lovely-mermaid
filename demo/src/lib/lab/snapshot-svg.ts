@@ -18,8 +18,10 @@ export interface View {
 	/** slot-grid gaps in units, between columns and between layer bands */
 	gapX: number;
 	gapY: number;
+	/** faint cell lines behind the picture */
+	grid: boolean;
 }
-export const DEFAULT_VIEW: View = { sx: 10, sy: 20, gapX: 4, gapY: 2 };
+export const DEFAULT_VIEW: View = { sx: 10, sy: 20, gapX: 4, gapY: 2, grid: true };
 
 export interface Rendered {
 	svg: string;
@@ -64,11 +66,13 @@ interface Box {
 	/** slotted on x: draw the reserved slot behind a dummy */
 	slot: boolean;
 	slotH: number;
+	/** right edge in units, the slot's when slotted */
+	right: number;
 }
 
 export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered {
 	const warnings: string[] = [];
-	const { sx, sy, gapX, gapY } = view;
+	const { sx, sy, gapX, gapY, grid } = view;
 	const fs = Math.max(11, Math.round(Math.min(sy * 0.7, sx * 1.7)));
 	const byId = new Map(snap.nodes.map((n) => [n.id, n]));
 	const declIdx = new Map(snap.nodes.map((n, i) => [n.id, i]));
@@ -95,15 +99,17 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 		row.forEach((n, i) => {
 			const w = n.w ?? 0;
 			const h = n.h ?? 0;
+			// a point (dummy) occupies one cell: centre that cell in the slot / band
 			box.set(n.id, {
 				n,
-				x: n.x ?? gapX / 2 + i * pitch + (slotW - w) / 2,
-				y: n.y ?? top + (bandH - h) / 2,
+				x: n.x ?? gapX / 2 + i * pitch + Math.floor((slotW - Math.max(1, w)) / 2),
+				y: n.y ?? top + Math.floor((bandH - Math.max(1, h)) / 2),
 				w,
 				h,
 				li,
 				slot: n.x === undefined,
-				slotH: bandH
+				slotH: bandH,
+				right: n.x === undefined ? gapX / 2 + i * pitch + slotW : n.x + w
 			});
 		});
 		const bs = row.map((n) => box.get(n.id) as Box);
@@ -118,7 +124,7 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	});
 	// Unlayered nodes stand in a column beside the layered picture — parked,
 	// not ranked: declaration order top-down, bands and counts stop before it.
-	const layeredX1 = Math.max(0, ...[...box.values()].map((b) => b.x + b.w));
+	const layeredX1 = Math.max(0, ...[...box.values()].map((b) => b.right));
 	const sideW = Math.max(1, ...unlayered.map((n) => n.w ?? 0));
 	const sideX = layeredX1 + gapX;
 	let sideTop = 0;
@@ -133,7 +139,8 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 			h,
 			li: null,
 			slot: n.x === undefined,
-			slotH: Math.max(1, h)
+			slotH: Math.max(1, h),
+			right: (n.x ?? sideX + (sideW - w) / 2) + w
 		});
 		sideTop += h + gapY;
 	}
@@ -155,7 +162,7 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	for (const c of compounds) {
 		let b: Box | null = null;
 		if (c.x !== undefined && c.y !== undefined) {
-			b = { n: c, x: c.x, y: c.y, w: c.w ?? 0, h: c.h ?? 0, li: null, slot: false, slotH: 0 };
+			b = { n: c, x: c.x, y: c.y, w: c.w ?? 0, h: c.h ?? 0, li: null, slot: false, slotH: 0, right: c.x + (c.w ?? 0) };
 		} else {
 			const kids = [...box.values(), ...frames].filter((k) => k.n.parent === c.id);
 			if (kids.length === 0) {
@@ -166,7 +173,7 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 			const y0 = Math.min(...kids.map((k) => k.y)) - gapY / 2;
 			const x1 = Math.max(...kids.map((k) => k.x + k.w)) + gapX / 2;
 			const y1 = Math.max(...kids.map((k) => k.y + k.h)) + gapY / 2;
-			b = { n: c, x: x0, y: y0, w: x1 - x0, h: y1 - y0, li: null, slot: false, slotH: 0 };
+			b = { n: c, x: x0, y: y0, w: x1 - x0, h: y1 - y0, li: null, slot: false, slotH: 0, right: x1 };
 		}
 		frames.push(b);
 		box.set(c.id, b);
@@ -184,14 +191,17 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 			const len = side === 'N' || side === 'S' ? b.w : b.h;
 			onSide.forEach(({ q }, i) => {
 				const off = q.pos ?? ((i + 1) * len) / (onSide.length + 1);
+				// a point-like node (a dummy) has no border: every port is the point
 				const pt: Pt =
-					side === 'N'
-						? [b.x + off, b.y]
-						: side === 'S'
-							? [b.x + off, b.y + b.h - 1]
-							: side === 'W'
-								? [b.x, b.y + off]
-								: [b.x + b.w - 1, b.y + off];
+					b.w === 0 || b.h === 0
+						? [b.x + b.w / 2, b.y + b.h / 2]
+						: side === 'N'
+							? [b.x + off, b.y]
+							: side === 'S'
+								? [b.x + off, b.y + b.h - 1]
+								: side === 'W'
+									? [b.x, b.y + off]
+									: [b.x + b.w - 1, b.y + off];
 				portPt.set(`${b.n.id}\u0000${q.id}`, { pt, port: q, placed: q.pos !== undefined });
 			});
 		}
@@ -299,10 +309,14 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	push(
 		`<defs><marker id="lab-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${C.edge}"/></marker>` +
 			`<marker id="lab-arr-rev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${C.rev}"/></marker>` +
-			`<marker id="lab-arr-prov" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${C.prov}"/></marker></defs>`
+			`<marker id="lab-arr-prov" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${C.prov}"/></marker>` +
+			`<pattern id="lab-grid" width="${sx}" height="${sy}" patternUnits="userSpaceOnUse"><path d="M${sx} 0H0V${sy}" fill="none" stroke="#ffffff" stroke-opacity="0.07"/></pattern></defs>`
 	);
 	if (snap.title) push(`<text x="${ML}" y="20" fill="${C.edge}">${esc(snap.title)}</text>`);
 	push(`<g transform="translate(${ML},${MT})">`);
+	// the pattern's origin is this group's origin = cell (x0, y0), so its lines
+	// fall on cell boundaries
+	if (grid) push(`<rect x="0" y="0" width="${X(x1)}" height="${Y(y1)}" fill="url(#lab-grid)"/>`);
 	for (const b of bands) {
 		push(
 			`<rect x="${-ML + 4}" y="${Y(b.y0)}" width="${X(layeredX1) + ML - 4 + MR}" height="${Y(b.y1) - Y(b.y0)}" fill="${C.band}" fill-opacity="0.08"/>` +
@@ -319,21 +333,26 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 		const title = esc(f.n.label ?? f.n.id);
 		const tw = title.length * fs * 0.62 + 8;
 		push(
-			`<g data-node="${esc(f.n.id)}"><rect ${rectAttrs(f)} fill="${C.frame}" fill-opacity="0.06" stroke="${C.frame}" stroke-dasharray="6 4"/>` +
+			`<g data-node="${esc(f.n.id)}"><rect ${rectAttrs(f)} fill="${C.frame}" fill-opacity="0.06" stroke="${C.frame}" stroke-dasharray="6 4" pointer-events="all"/>` +
 				`<rect x="${PX(f.x) + 6}" y="${PY(f.y) - fs * 0.6}" width="${tw}" height="${fs * 1.2}" fill="${C.labelBg}"/>` +
 				`<text x="${PX(f.x) + 10}" y="${PY(f.y) + fs * 0.35}" fill="${C.frame}">${title}</text></g>`
 		);
 	}
 	// Nodes first, edges over them: a line cutting through a box is a
-	// routing error and must stay visible.
+	// routing error and must stay visible. `pointer-events="all"` keeps an
+	// unfilled (provisional) box hoverable inside, not just on its outline.
 	for (const b of leafBoxes) {
 		const id = esc(b.n.id);
 		const placed = b.n.x !== undefined;
 		if (b.n.kind === 'dummy') {
 			const cxp = PX(b.x + b.w / 2);
 			const cyp = PY(b.y + b.h / 2);
+			// the reserved slot, drawn like a box of the slot's size: inset half a
+			// cell like every node rect, so it matches its neighbours
+			const sw = Math.max(0, slotW - 1) * sx;
+			const sh = Math.max(0, b.slotH - 1) * sy;
 			const slot = b.slot
-				? `<rect x="${cxp - (slotW * sx) / 2}" y="${cyp - (b.slotH * sy) / 2}" width="${slotW * sx}" height="${b.slotH * sy}" rx="4" fill="none" stroke="${C.slot}" stroke-dasharray="3 3"/>`
+				? `<rect x="${cxp - sw / 2}" y="${cyp - sh / 2}" width="${sw}" height="${sh}" rx="4" fill="none" stroke="${C.slot}" stroke-dasharray="3 3"/>`
 				: '';
 			const dot = placed
 				? `fill="${C.dim}"`
@@ -354,7 +373,7 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 			? `fill="${C.node}" stroke="${C.border}"`
 			: `fill="none" stroke="${C.prov}" stroke-dasharray="5 4"`;
 		push(
-			`<g data-node="${id}"><rect ${rectAttrs(b)} rx="3" ${look}/>${text}</g>`
+			`<g data-node="${id}"><rect ${rectAttrs(b)} rx="3" ${look} pointer-events="all"/>${text}</g>`
 		);
 	}
 	snap.edges.forEach((e, i) => {
@@ -363,7 +382,15 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 		const prov = e.route === undefined;
 		const color = e.reversed ? C.rev : prov ? C.prov : C.edge;
 		const arrow = e.reversed ? 'lab-arr-rev' : prov ? 'lab-arr-prov' : 'lab-arr';
-		const marker = e.reversed ? `marker-start="url(#${arrow})"` : `marker-end="url(#${arrow})"`;
+		// the head belongs to the edge's true end: never at a dummy, which only
+		// carries the chain through its layer
+		const headNode = box.get(e.reversed ? e.from : e.to);
+		const marker =
+			headNode?.n.kind === 'dummy'
+				? ''
+				: e.reversed
+					? `marker-start="url(#${arrow})"`
+					: `marker-end="url(#${arrow})"`;
 		push(
 			`<g data-edge="${i}" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><polyline points="${pts
 				.map((p) => `${PX(p[0])},${PY(p[1])}`)
@@ -372,6 +399,8 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	});
 	for (const [key, { pt, port, placed }] of portPt) {
 		const nid = key.split('\u0000')[0];
+		const owner = box.get(nid);
+		if (owner !== undefined && (owner.w === 0 || owner.h === 0)) continue; // a point has no border cells
 		const look = placed ? `fill="${C.port}"` : `fill="none" stroke="${C.port}"`;
 		push(
 			`<g data-port="${esc(port.id)}" data-pnode="${esc(nid)}"><rect x="${PX(pt[0]) - 3}" y="${PY(pt[1]) - 3}" width="6" height="6" ${look}/></g>`

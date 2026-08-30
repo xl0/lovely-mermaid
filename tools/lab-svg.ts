@@ -23,6 +23,7 @@ const opt = (name: string): string | null => {
 const out = opt('--out')
 const width = opt('-w') ?? '1600'
 const flags: Partial<View> = {}
+if (opt('--grid') === '0') flags.grid = false
 for (const [flag, key] of [
   ['--sx', 'sx'],
   ['--sy', 'sy'],

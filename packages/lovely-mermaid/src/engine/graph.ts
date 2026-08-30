@@ -6,7 +6,7 @@
  * order and coordinates, so a snapshot can leave the field out.
  */
 import type { SEdge, SNode, Snapshot, SPort } from './snapshot.ts'
-import type { InputLabel, LayoutInput, Pt, Spacing } from './types.ts'
+import type { InputLabel, LayoutInput, PlacedLabel, Pt, Spacing } from './types.ts'
 
 export type Side = 'N' | 'S' | 'E' | 'W'
 
@@ -24,6 +24,7 @@ export interface LPort {
 
 export interface LNode {
   id: string
+  label?: string
   kind: 'node' | 'dummy'
   /** dummy: the input edge it stands in for */
   origin?: string
@@ -45,9 +46,14 @@ export interface LEdge {
   src: LPort
   dst: LPort
   reversed: boolean
+  /** layering: cost per unit of length, and the least length allowed */
+  weight: number
+  minLen: number
   /** carried by the first segment only */
   labels: InputLabel[]
   route: Pt[] | null
+  /** where the labels ended up, on the first segment, once placed */
+  placed: PlacedLabel[]
 }
 
 export interface LGraph {
@@ -60,7 +66,15 @@ export interface LGraph {
 }
 
 export function buildGraph(input: LayoutInput): LGraph {
-  const g: LGraph = { nodes: [], edges: [], layers: [], spacing: input.spacing, warnings: [] }
+  // Copy what is taken from the input: the graph must not alias caller
+  // objects (a reactive proxy, say — structuredClone refuses those).
+  const g: LGraph = {
+    nodes: [],
+    edges: [],
+    layers: [],
+    spacing: { ...input.spacing },
+    warnings: [],
+  }
   const byId = new Map<string, LNode>()
   for (const n of input.nodes) {
     if (byId.has(n.id)) {
@@ -69,6 +83,7 @@ export function buildGraph(input: LayoutInput): LGraph {
     }
     const node: LNode = {
       id: n.id,
+      label: n.label,
       kind: 'node',
       w: n.w,
       h: n.h,
@@ -92,9 +107,18 @@ export function buildGraph(input: LayoutInput): LGraph {
       g.warnings.push(`edge "${e.id}": self-loops are not routed yet`)
       continue
     }
-    // One port per edge end; sides are decided after cycle breaking.
-    const src: LPort = { id: `${e.id}.s`, node: from, side: 'S', order: 0, pos: 0, in: [], out: [] }
-    const dst: LPort = { id: `${e.id}.t`, node: to, side: 'N', order: 0, pos: 0, in: [], out: [] }
+    // One port per edge end, facing the declared direction for now; the
+    // ordering phase settles sides, order and cells after cycle breaking.
+    const src: LPort = {
+      id: `${e.id}.s`,
+      node: from,
+      side: 'S',
+      order: -1,
+      pos: -1,
+      in: [],
+      out: [],
+    }
+    const dst: LPort = { id: `${e.id}.t`, node: to, side: 'N', order: -1, pos: -1, in: [], out: [] }
     from.ports.push(src)
     to.ports.push(dst)
     const edge: LEdge = {
@@ -103,8 +127,11 @@ export function buildGraph(input: LayoutInput): LGraph {
       src,
       dst,
       reversed: false,
-      labels: e.labels ?? [],
+      weight: 1,
+      minLen: 1,
+      labels: (e.labels ?? []).map((l) => ({ ...l })),
       route: null,
+      placed: [],
     }
     src.out.push(edge)
     dst.in.push(edge)
@@ -113,12 +140,23 @@ export function buildGraph(input: LayoutInput): LGraph {
   return g
 }
 
+/**
+ * Every phase takes a graph and returns a new one: it clones its input and
+ * works on the clone, so callers keep what they passed in (the candidate
+ * loop and the lab's edit-and-continue depend on it). `structuredClone`
+ * keeps the internal references (ports ↔ nodes ↔ edges) intact.
+ */
+export function cloneGraph(g: LGraph): LGraph {
+  return structuredClone(g)
+}
+
 /** The graph as the lab draws it; fields still at `-1` are left out. */
-export function toSnapshot(g: LGraph, title: string, withPorts: boolean): Snapshot {
+export function toSnapshot(g: LGraph, title: string): Snapshot {
   const nodes: SNode[] = g.nodes.map((n) => {
     const s: SNode = { id: n.id }
     if (n.kind === 'dummy') s.kind = 'dummy'
     else {
+      if (n.label !== undefined) s.label = n.label
       s.w = n.w
       s.h = n.h
     }
@@ -126,17 +164,18 @@ export function toSnapshot(g: LGraph, title: string, withPorts: boolean): Snapsh
     if (n.order >= 0) s.order = n.order
     if (n.x >= 0) s.x = n.x
     if (n.y >= 0) s.y = n.y
-    if (withPorts) {
-      s.ports = n.ports.map((p): SPort => ({ id: p.id, side: p.side, pos: p.pos, order: p.order }))
-    }
+    s.ports = n.ports.map((p): SPort => {
+      const q: SPort = { id: p.id, side: p.side }
+      if (p.pos >= 0) q.pos = p.pos
+      if (p.order >= 0) q.order = p.order
+      return q
+    })
     return s
   })
   const edges: SEdge[] = g.edges.map((e) => {
     const s: SEdge = { from: e.src.node.id, to: e.dst.node.id }
-    if (withPorts) {
-      s.fromPort = e.src.id
-      s.toPort = e.dst.id
-    }
+    s.fromPort = e.src.id
+    s.toPort = e.dst.id
     if (e.reversed) s.reversed = true
     if (e.route !== null) s.route = e.route
     const label = e.labels.find((l) => l.at === 'center')
