@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import DiagramViewer from '$lib/DiagramViewer.svelte';
+	import BuildContract from '$lib/learn/BuildContract.svelte';
 	import More from '$lib/learn/More.svelte';
 	import Term from '$lib/learn/Term.svelte';
 
@@ -525,6 +526,15 @@
 			<DiagramViewer src={playSrc} elkExtra={cb(playCb)} />
 		</div>
 	</div>
+
+	<BuildContract
+		phase="Cycle breaking"
+		receives="The directed graph, declaration order, edge priorities, and cluster ownership."
+		produces="An acyclic working orientation plus the exact set of temporarily reversed edges."
+		guarantees="The working graph has no directed cycle; every declared edge remains available to restore when we draw."
+		baseline="Run depth-first search; mark every edge to an active ancestor as reversed, then retain that set through drawing."
+		pushback="A completed candidate reverses an important edge, produces excessive layer span, or turns a cluster’s causal order upside down."
+	/>
 
 	<h2>Takeaways</h2>
 	<ul>

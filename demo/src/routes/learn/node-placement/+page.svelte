@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import BuildContract from '$lib/learn/BuildContract.svelte';
 	import ElkGrid from '$lib/learn/ElkGrid.svelte';
+	import More from '$lib/learn/More.svelte';
 	import Term from '$lib/learn/Term.svelte';
 
 	// ---- the placement widget ---------------------------------------------
@@ -272,7 +274,7 @@
 	// ---- playground -------------------------------------------------------
 	// Chosen so the four strategies visibly differ (measured: Brandes–Köpf
 	// widest and straightest, linear segments narrower with one more kink,
-	// network simplex between, SIMPLE narrowest and kinkiest).
+	// network simplex between, simple centring narrowest and kinkiest).
 	const PLAY = `a --> g
 a --> k
 b --> c
@@ -347,8 +349,8 @@ f --> i`;
 	<p class="lede">
 		<a href={resolve('/learn/crossing-minimization')}>Crossing minimization</a> fixed each layer’s
 		order. Node placement now assigns horizontal coordinates. It must preserve that order and
-		leave a minimum gap between neighbours; within those constraints, it decides whether the
-		drawing is compact, balanced, or straight.
+		leave a minimum gap between neighbouring box edges, not merely between their centres. Within
+		those constraints, it decides whether the drawing is compact, balanced, or straight.
 	</p>
 	<Term name="node placement">
 		Assigning an x coordinate to every node and dummy after layers and orders are fixed. Also
@@ -439,6 +441,40 @@ f --> i`;
 		<em>Straight long edges</em> aligns each chain under its source and leaves one bend near
 		the target. The aligned result is wider.
 	</p>
+
+	<h2>Placement moves boxes, not points</h2>
+	<p>
+		The diagrams above use node centres as shorthand, but every real node already has a measured
+		width and height before placement begins. If <code>u</code> is immediately left of
+		<code>v</code>, their centres must satisfy
+		<code>x(v) − x(u) ≥ width(u)/2 + gap + width(v)/2</code>. A long label therefore pushes its
+		neighbour away even when both centres would otherwise align neatly with their edges.
+	</p>
+	<p>
+		The experiment deliberately gives every real node the same 40-unit width. Its fixed
+		56-unit centre gap is 20 units for each half-box plus 16 units of empty space. A production
+		placement method uses the measured half-width of each neighbouring pair instead; the
+		ordering rule stays the same, but the legal coordinates are no longer evenly spaced.
+	</p>
+	<p>
+		Height acts on the flow axis. A layer must be thick enough for its tallest node, and the next
+		layer starts beyond that envelope plus the between-layer spacing. A wrapped label can
+		therefore make its whole layer taller and push every later layer down. In a left-to-right
+		layout, width and height exchange these roles.
+	</p>
+	<p>
+		Ports belong to those rectangles. A free port gains more border along which to slide when its
+		node becomes wider, while a fixed port keeps its declared side, order, or position. Placement
+		may align important ports directly rather than aligning box centres; the same measured gap
+		constraints still keep the rectangles disjoint.
+	</p>
+	<p>
+		For ordinary nodes, our renderer wraps labels at 24 display columns over at most four lines.
+		The box width comes from the widest wrapped line plus borders and padding; its height comes
+		from the line count. Class and ER boxes likewise use their widest compartment and total
+		compartment rows. Those dimensions are handed to ELK before any coordinates are chosen.
+	</p>
+
 	<h2>Four objectives, one axis</h2>
 	<p>
 		We want long edges <b>straight</b>, parents <b>centred</b> over their children, edges
@@ -543,13 +579,92 @@ f --> i`;
 		so long edges come out straight because bending them is expensive, not because a rule
 		forbids it.
 	</p>
+	<More id="network-simplex" summary="Side quest: what is a network simplex?">
+		<p>
+			<b>Short version:</b> give every legal placement a price, then find the cheapest one.
+			“Network” refers to a temporary graph of rules that the solver builds; it is not the
+			diagram itself. “Simplex” is the improvement procedure. It is unrelated to the
+			<em>simple centring</em> preset below.
+		</p>
+		<p>
+			For horizontal placement, the problem has three ingredients:
+		</p>
+		<ul>
+			<li>
+				<b>Choices:</b> one horizontal coordinate, <code>x(v)</code>, for every node and
+				dummy.
+			</li>
+			<li>
+				<b>Rules:</b> if <code>u</code> is immediately left of <code>v</code>, leave enough
+				space for both node widths and the gap between them. Nodes may slide, but may not
+				overlap or swap order.
+			</li>
+			<li>
+				<b>Price:</b> add up every edge segment’s horizontal length, multiplied by that
+				segment’s weight. Lower is better.
+			</li>
+		</ul>
+		<p>
+			The weights express taste. Moving a node ten units left might shorten two ordinary
+			segments by ten but lengthen one important segment by ten. If all three cost the same,
+			the move saves ten overall. If the important segment has weight eight, the move costs
+			sixty instead. This is why a high weight on dummy-to-dummy segments keeps long edges
+			straight without making straightness a hard rule.
+		</p>
+		<p>
+			It is called <b>linear</b> optimization because every rule and every price is made only
+			from sums and constant multipliers: twice this distance, plus eight times that one.
+			There are no curves or thresholds. That restricted shape lets a specialized solver avoid
+			trying coordinates one by one.
+		</p>
+		<p>
+			The layout engine turns the rules and prices into an <b>auxiliary network</b>. An arc can
+			say “these two items need at least this much separation” or “distance here costs this
+			much.” Any arrangement satisfying every minimum separation is feasible. The solver starts
+			with one such arrangement and repeatedly improves it:
+		</p>
+		<ol>
+			<li>Find a connected group that would make the total price fall if shifted sideways.</li>
+			<li>
+				Shift the group until it reaches the next minimum gap. No overlap or order change is
+				allowed.
+			</li>
+			<li>
+				Update which gaps are exactly at their minimum, then look for another improving shift.
+			</li>
+		</ol>
+		<p>
+			Under the hood, the solver keeps a spanning tree made from gaps that are exactly at their
+			minimum. Replacing one edge of that tree with another is a <b>pivot</b>, the basic simplex
+			step. Stop when no pivot can lower the price. This tree representation is what makes
+			network simplex much cheaper than a general-purpose optimizer for this kind of problem.
+		</p>
+		<p>
+			You met the same machinery in <a href={resolve('/learn/layering')}>layering</a>, with a
+			different price list. There the choices are layer numbers, the rule is “every target must
+			be below its source,” and the price is total vertical edge span. Here the choices are x
+			coordinates, the rules are left-to-right gaps, and the price is weighted horizontal edge
+			length. Same solver; different problem.
+		</p>
+		<p>
+			“Optimal” therefore needs a qualifier. Network simplex finds the best coordinates for the
+			chosen weights and constraints. It does not revisit crossings, understand semantic
+			importance, or know that one bend looks uglier than another unless the model assigns that
+			bend a higher cost.
+		</p>
+	</More>
 
 	<h2>Playground</h2>
 	<p>
 		The playground uses the engine’s real coordinates rather than the slot grid. On this
 		particular graph, Brandes–Köpf is widest and straightest; linear segments is narrower with
-		one additional kink; network simplex falls between them; and <code>SIMPLE</code> packs
+		one additional kink; network simplex falls between them; and simple centring packs
 		most tightly while bending the long edges most.
+	</p>
+	<p>
+		To expose the size constraint, change the first line to
+		<code>a[long source label] --&gt; g</code>. The measured box widens, its neighbours
+		move, and every strategy must preserve the new edge-to-edge gap.
 	</p>
 	<div class="play">
 		<div class="controls">
@@ -558,10 +673,10 @@ f --> i`;
 			<label>
 				<span class="dim">placement</span>
 				<select bind:value={playNp}>
-					<option>BRANDES_KOEPF</option>
-					<option>LINEAR_SEGMENTS</option>
-					<option>NETWORK_SIMPLEX</option>
-					<option>SIMPLE</option>
+					<option value="BRANDES_KOEPF">Brandes–Köpf</option>
+					<option value="LINEAR_SEGMENTS">linear segments</option>
+					<option value="NETWORK_SIMPLEX">network simplex</option>
+					<option value="SIMPLE">simple centring</option>
 				</select>
 			</label>
 		</div>
@@ -570,15 +685,27 @@ f --> i`;
 		</div>
 	</div>
 
+	<BuildContract
+		phase="Node placement"
+		receives="Layer orders, measured node rectangles, dummy chains, ports, and minimum gaps."
+		produces="Coordinates for every real node, dummy, and layer envelope."
+		guarantees="Layer order is unchanged and measured rectangles remain disjoint with the required gaps."
+		baseline="Pack each layer by box-edge gaps, then repeatedly pull nodes toward their neighbours while clamping them between ordered neighbours."
+		pushback="Routing needs too many tracks or bends, the drawing is too wide, or labels and important paths have no usable alignment."
+	/>
+
 	<h2>Takeaways</h2>
 	<ul>
-		<li>Placement assigns x under two rules — keep the order, keep the gap — and four wishes: straight long edges, centred parents, short edges, narrow drawing.</li>
-		<li>Straightness costs width: a straight chain owns its column through every layer it crosses.</li>
-		<li>Priority method, linear segments, Brandes–Köpf, network simplex: priorities, rigid pieces, averaged alignments, or a price list. Brandes–Köpf is the usual default; linear segments are usually narrower.</li>
-		<li>Crossings are settled before this phase; placement can only make a drawing wider, straighter, or more balanced — never less tangled.</li>
+		<li>Placement assigns x under two rules — keep the order and keep measured box edges apart — plus four wishes: straight long edges, centred parents, short edges, narrow drawing.</li>
+		<li>Long labels change geometry before placement: width pushes neighbours sideways; wrapped height expands the layer on the flow axis.</li>
+		<li>Straightness can cost width: a straight chain owns its column through every layer it crosses.</li>
+		<li>Priority placement moves important nodes first; linear segments make dummy chains rigid; Brandes–Köpf averages four aligned compactions; network simplex minimizes a weighted price.</li>
+		<li>Brandes–Köpf is the usual default; linear segments are often narrower. Simple centring is a baseline, not a serious general strategy.</li>
+		<li>Crossings were settled by the layer orders. Placement changes geometry, not their combinatorial count.</li>
 	</ul>
 	<p class="dim">
-		Next: edge routing — the nodes are placed; now the edges need paths between them.
+		Next: <a href={resolve('/learn/edge-routing')}>edge routing</a> — the nodes are placed; now
+		the edges need paths between them.
 	</p>
 </div>
 

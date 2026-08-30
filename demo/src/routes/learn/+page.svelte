@@ -27,9 +27,26 @@
 			title: 'Node placement',
 			blurb: 'turning orders into coordinates; the width-vs-straightness trade'
 		},
-		{ href: null, title: 'Edge routing', blurb: 'channels, tracks, and orthogonal lines' },
-		{ href: null, title: 'Compound graphs', blurb: 'nested boxes, border-crossing edges' },
-		{ href: null, title: 'The terminal grid', blurb: 'from float coordinates to character cells' }
+		{
+			href: '/learn/edge-routing',
+			title: 'Edge routing',
+			blurb: 'channels, tracks, and orthogonal lines'
+		},
+		{
+			href: '/learn/compound-graphs',
+			title: 'Compound graphs',
+			blurb: 'nested boxes, border-crossing edges'
+		},
+		{
+			href: '/learn/terminal-grid',
+			title: 'The terminal grid',
+			blurb: 'from float coordinates to character cells'
+		},
+		{
+			href: '/learn/iterative-refinement',
+			title: 'Iterative refinement',
+			blurb: 'letting downstream costs reopen earlier decisions'
+		}
 	] as const;
 </script>
 
@@ -40,18 +57,14 @@
 <div class="page">
 	<h1><span class="accent">lovely-mermaid</span> <span class="dim">/ learn</span></h1>
 	<p class="dim">
-		How layered graph layout actually works, one topic per page — claims demonstrated, not
-		asserted.
+		How to build a layered graph layout engine, one decision at a time — live experiments expose
+		the state, invariants, trade-offs, and feedback loops.
 	</p>
 	<ol start="0">
 		{#each topics as t}
 			<li>
-				{#if t.href}
-					<a href={resolve(t.href)}>{t.title}</a>
-					<span class="dim">— {t.blurb}</span>
-				{:else}
-					<span class="dim">{t.title} — {t.blurb} <em>(upcoming)</em></span>
-				{/if}
+				<a href={resolve(t.href)}>{t.title}</a>
+				<span class="dim">— {t.blurb}</span>
 			</li>
 		{/each}
 	</ol>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import BuildContract from '$lib/learn/BuildContract.svelte';
 	import ElkGrid from '$lib/learn/ElkGrid.svelte';
 	import Term from '$lib/learn/Term.svelte';
 
@@ -427,6 +428,14 @@ f --> i`;
 		edge; and a badly bent dummy chain can be harder to follow than one additional crossing.
 		Edge weights and rigid dummy chains let an engine express some of those priorities.
 	</p>
+	<p>
+		Ports can also remove freedom from the sweep. If several edges use fixed ports on one node,
+		the ports have their own left-to-right order along the border — a miniature layer order.
+		When that order disagrees with the targets below, crossings are forced in the ordinary layer
+		gap even if every node is ordered optimally. Free ports may swap along the border to match the
+		target order; fixed port order preserves the model. A router can avoid the crossing only by
+		paying for an exceptional detour outside the channel.
+	</p>
 
 	<h2>Playground</h2>
 	<p>
@@ -464,12 +473,22 @@ f --> i`;
 		</div>
 	</div>
 
+	<BuildContract
+		phase="Crossing minimization"
+		receives="Fixed layers containing real nodes and dummies, plus cluster and port-order constraints."
+		produces="A total left-to-right order of every occupant in every layer."
+		guarantees="Every occupant appears once and every required contiguity or fixed-order constraint is preserved."
+		baseline="Alternate downward and upward barycenter sweeps, then keep adjacent swaps that reduce crossings."
+		pushback="Completed routes still cross heavily, fixed ports are inverted, or long dummy chains weave through several layers."
+	/>
+
 	<h2>Takeaways</h2>
 	<ul>
 		<li>With layers fixed, the only freedom is the order within each layer — and crossings are decided entirely by those orders.</li>
 		<li>Counting crossings needs no geometry; minimizing them is NP-hard even for two layers with one frozen.</li>
 		<li>The layer sweep sorts each layer by the barycenter (or median) of its neighbours in the previous one, alternating direction until stable; a transpose pass cleans up locally.</li>
 		<li>Dummies are ordered like nodes. Spaghetti is dummies ordered badly — a misplaced dummy drags its edge on a detour across the layer.</li>
+		<li>Fixed port order is another ordering constraint and can force crossings that moving whole nodes cannot remove.</li>
 		<li>Sifting, global sifting and exact integer programming all beat the sweep on crossings; the sweep ships because it is fast and close, and because crossings are not the whole of readability anyway.</li>
 	</ul>
 	<p class="dim">

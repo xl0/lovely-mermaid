@@ -914,9 +914,11 @@
 		{/each}
 	</svg>
 	<p>
-		This order makes the pipeline tractable, but it also limits later repairs. A placement
-		phase cannot reorder a layer to remove a crossing, for example. Local oddities often trace
-		back to an earlier phase whose decision is now fixed.
+		This order makes the first implementation tractable. In a one-pass engine, placement cannot
+		reorder a layer to remove a crossing; local oddities often trace back to an earlier commitment.
+		A better engine can preserve each phase’s output, measure the complete drawing, and reopen the
+		responsible decision. The phases remain useful even when the arrows between them eventually
+		point both ways.
 	</p>
 
 	<div class="">
@@ -1098,8 +1100,8 @@
 	</div>
 
 	<p class="dim">
-		Each phase gets its own page, live experiments included. Start with
-		<a href={resolve('/learn/cycle-breaking')}>cycle breaking</a>.
+		Each phase gets its own page, followed by a final lesson on feeding downstream failures back
+		into earlier choices. Start with <a href={resolve('/learn/cycle-breaking')}>cycle breaking</a>.
 	</p>
 </div>
 

@@ -2,8 +2,10 @@
 
 A series of demo pages, one topic each, teaching how layered graph layout
 works to smart readers with no graph-drawing background. Every page mixes
-prose with **live renders** (our own engine, per-figure ELK options) so every
-claim is demonstrated, not illustrated. Each topic ends with a playground.
+prose with **live experiments** so every claim is demonstrated, not merely
+illustrated. The aim is to teach the state, invariants, algorithms, diagnostics,
+and refinement loops needed to build a layout engine. ELK is a useful reference
+implementation and comparison point, not the architecture being taught.
 
 ## Series roadmap (one page per topic, in pipeline order)
 
@@ -22,7 +24,7 @@ claim is demonstrated, not illustrated. Each topic ends with a playground.
    mirroring verified engine output (rank bands + per-node tags: greedy
    score / DFS visit order / declaration order); the engine runs only in
    the playground.
-2. Layering — in progress. Outline: (1) lede — input is a DAG, output is a
+2. Layering — done. Outline: (1) lede — input is a DAG, output is a
    rank per node, every edge strictly down, huge remaining freedom; (2) the
    three prices that can't all be minimized: height, total edge span, row
    width; (3) centerpiece widget — drag nodes vertically between rank
@@ -48,7 +50,7 @@ claim is demonstrated, not illustrated. Each topic ends with a playground.
    dashed pill-sized slot), per-band `real+dummy` counts on the right,
    edges straight between slots. The playground keeps ELK's layers and
    left-to-right order but re-places x on the same grid.
-3. Crossing minimization — in progress. Outline: (1) lede — layers are
+3. Crossing minimization — done. Outline: (1) lede — layers are
    fixed, the only freedom left is the order within each layer, and
    crossings are the readability cost that order decides; dummies are in
    the game (a long edge is ordered in every layer it crosses); (2) counting
@@ -61,7 +63,9 @@ claim is demonstrated, not illustrated. Each topic ends with a playground.
    fix one layer, sort the next by barycenter (or median), alternate
    direction until nothing changes; transpose/greedy-switch polish; (5)
    long edges: where the tangle comes from — a long edge's dummies get
-   sorted like nodes, so a bad order weaves it through the drawing; (6) playground — shared
+   sorted like nodes, so a bad order weaves it through the drawing; fixed
+   port order is another ordering constraint that can force crossings;
+   (6) playground — shared
    ElkGrid component (layering playground's renderer moved to
    $lib/learn), crossing-minimization strategy select (LAYER_SWEEP / NONE
    = declaration order) and thoroughness, crossings counted on the grid;
@@ -70,11 +74,13 @@ claim is demonstrated, not illustrated. Each topic ends with a playground.
    solver; (8) takeaways, next = node placement. Ref cards: Sugiyama,
    Tagawa & Toda 1981, Eades & Wormald 1994, Matuszewski et al. 1999,
    Bachmaier et al. 2011, Jünger & Mutzel 1997.
-4. Node placement — in progress. Outline: (1) lede — layers and orders
+4. Node placement — done. Outline: (1) lede — layers and orders
    are fixed; now x coordinates, the first geometric decision; the rules
-   (keep the order, keep a minimum gap) and the wishes (straight long
+   (keep the order, keep measured box edges apart) and the wishes (straight long
    edges, parents centred over children, short edges, narrow drawing) that
-   can't all be had; (2) centerpiece widget — drag nodes continuously
+   can't all be had; real widths set pairwise centre gaps, while the tallest
+   node sets its layer's flow-axis envelope and ports belong to those measured
+   rectangles; (2) centerpiece widget — drag nodes continuously
    sideways (order and gap enforced), live width / long-edge kinks / total
    horizontal edge length; buttons [pack left] (narrowest), [balance]
    (priority method: nodes move toward the mean of their neighbours,
@@ -88,9 +94,60 @@ claim is demonstrated, not illustrated. Each topic ends with a playground.
    (5) playground — ElkGrid in grid=false mode (ELK's real x), placement
    strategy select, stats add width and long-edge kinks; (6) takeaways,
    next = edge routing. Ref cards: Brandes & Köpf 2002, Sander 1996.
-5. Edge routing — channels, tracks, orthogonal vs polyline.
-6. Compound graphs — INCLUDE_CHILDREN, piercing, cluster inflation.
-7. The terminal grid — snapping, even widths, junction merging, labels.
+5. Edge routing — done. Outline: (1) lede — nodes are fixed; routing
+   chooses ports on measured box borders, segments, bends, and shared space;
+   (2) centerpiece widget —
+   drag four orthogonal jogs among channel tracks, with overlap conflicts and
+   channel height counted live; the two-track optimum demonstrates interval
+   packing; (3) polyline vs spline vs orthogonal figure trio, same endpoints
+   and dummy waypoint; (4) channel routing — source stub, jog, target stub;
+   greedy interval packing, with a side quest explaining why it is optimal
+   for fixed intervals; (5) free and fixed ports, a forced-crossing pair,
+   current implicit-port behavior, merged trunks, and stub–jog conflicts;
+   bends/crossings/tracks remain competing prices; (6) long dummy chains,
+   feedback lanes, and self-loops; obstacle routing as the non-layered
+   alternative; (7) labels as reserved geometry vs post-route placement;
+   (8) playground — elkjs routes an editable graph as ORTHOGONAL, POLYLINE,
+   or SPLINES and the page renders its actual sections/control points; (9)
+   takeaways, next = compound graphs.
+6. Compound graphs — done. Outline: (1) lede — containment is a geometric
+   constraint, not a frame painted afterward; frames bound complete measured
+   child rectangles plus title and padding, and hierarchy crossings are
+   distinguished from endpoint ports; (2) centerpiece widget — drag
+   one layer into order while two cluster hulls expose foreign members,
+   with crossings, invalid frames, and combined frame width counted live;
+   the best legal order accepts three crossings; (3) recursive layout vs one
+   global run, showing why a collapsed parent cannot route to an inner
+   endpoint; (4) INCLUDE_CHILDREN and the constraints it adds to every
+   pipeline phase; (5) nested piercing — one logical edge returned as route
+   sections in root, parent, and child coordinate systems; (6) live compact
+   vs boundary-bundle ELK results demonstrating cluster inflation and the
+   loss of independent per-cluster direction; (7) playground — editable
+   compact, bundled, and nested Mermaid sources rendered by the real terminal
+   engine; (8) takeaways, next = terminal grid.
+7. The terminal grid — done. Outline: (1) lede — ELK floats must become
+   integer rows and display columns; (2) centerpiece widget — vary drift at
+   a hierarchical route seam and compare independent rounding with
+   orientation-preserving snapping; (3) even node widths keep aligned centres
+   integral, with port snapping and half-open endpoint correction; (4) editable
+   Unicode-width lab contrasts UTF-16 length, code points, graphemes, and
+   display columns, and explains that wrapping determines node dimensions
+   before layout; (5) direction-mask widget builds corners, tees, and
+   crossings from U/D/L/R bits; (6) cell occupancy, pierceable borders,
+   metadata, and post-route label placement; (7) canvas flips preserve text;
+   (8) playground — editable body, direction control, and junction/wide-label/
+   frame presets rendered by the real terminal engine; (9) phase contract,
+   takeaways, next = iterative refinement.
+8. Iterative refinement — done. The one-way pipeline becomes a dependency
+   graph with checkpoints and bounded feedback. The centerpiece contrasts
+   locally compact placement with a reopened placement that uses existing
+   width to remove three route tracks and eight bends. Sections cover
+   invalidation, known inputs versus downstream diagnostics, local repair,
+   coordinate descent, candidate portfolios, lexicographic final-layout
+   scoring, stability, convergence guards, and a small refinement controller.
+   Every phase lesson now ends with a builder's contract: received state,
+   produced state, hard invariant, first viable implementation, and downstream
+   signal that justifies reopening it.
 
 Routes: `/learn` (index listing topics, done/upcoming) and
 `/learn/<topic>`. Shared bits stay minimal — reuse `DiagramViewer`; a small

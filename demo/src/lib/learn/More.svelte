@@ -31,7 +31,10 @@
 
 <style>
 	.more {
-		margin: 0.6rem 0;
+		margin: 0.8rem 0;
+		padding: 0.55rem 0.75rem;
+		border: 1px solid var(--muted);
+		border-radius: 5px;
 	}
 	.more summary {
 		cursor: pointer;

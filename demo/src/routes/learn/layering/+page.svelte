@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import BuildContract from '$lib/learn/BuildContract.svelte';
 	import ElkGrid from '$lib/learn/ElkGrid.svelte';
 	import { edgePts, slotted, type Fig } from '$lib/learn/slots';
 	import Term from '$lib/learn/Term.svelte';
@@ -381,6 +382,15 @@ lint --> pack`;
 			<ElkGrid src={playSrc} options={lay(playLay)} />
 		</div>
 	</div>
+
+	<BuildContract
+		phase="Layering"
+		receives="The acyclic orientation, hierarchy constraints, and any minimum edge lengths."
+		produces="One integer layer per node and a dummy chain for every edge that skips layers."
+		guarantees="Every working edge advances by at least its required number of layers."
+		baseline="Visit the DAG in topological order; sources start at zero and every other node follows its deepest predecessor by one layer."
+		pushback="The complete drawing has too many dummies, excessive height, crowded layers, or width pressure that placement cannot repair."
+	/>
 
 	<h2>Takeaways</h2>
 	<ul>
