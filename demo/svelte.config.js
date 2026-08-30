@@ -13,7 +13,8 @@ export default {
 		// Import lovely-mermaid's source directly (no build step, tracks HEAD).
 		alias: {
 			'lovely-mermaid': '../packages/lovely-mermaid/src/index.ts',
-			'lovely-mermaid-elk': '../packages/lovely-mermaid/src/layout-elk.ts'
+			'lovely-mermaid-elk': '../packages/lovely-mermaid/src/layout-elk.ts',
+			'lovely-mermaid-engine': '../packages/lovely-mermaid/src/layout-engine.ts'
 		},
 		paths: { base: /** @type {`/${string}` | ''} */ (process.env.BASE_PATH ?? '') }
 	}

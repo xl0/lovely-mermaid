@@ -21,14 +21,27 @@ skills/lovely-mermaid/    copyable agent skill: what renders, in few words
 examples/                 .mmd corpus for eyeballing layout quality (also a
                           crash regression: cluster-cycle.mmd)
 docs/layout-primer.md     field overview of graph layout/routing (for humans)
+docs/elk-layered.md       ELK Layered code dive (eclipse/elk @ 8aaa3c14): pipeline,
+                          data model, every phase as implemented, compound handling,
+                          options; chapter 8 = the decisions for our engine. Read
+                          the matching chapter before implementing a phase.
 docs/learn-plan.md        /learn lesson series roadmap + writing conventions
 demo/src/routes/          / (streaming demo), /render (renderer/ELK toggles +
                           ELK options dropdown), /examples (gallery over
-                          examples/*.mmd, per-card viewer), /learn (lessons;
+                          examples/*.mmd, per-card viewer), /learn
+                          (interactive layered-layout lessons through
+                          terminal-grid conversion and bounded iterative
+                          refinement; each phase closes with its state contract,
+                          invariant, minimal implementation, and rollback signal;
                           shared route layout imports `$lib/learn/lesson.css`,
                           pages keep only widget-specific CSS)
+demo/src/lib/lab/         the layout lab (route /lab/[[data]], see below):
+                          snapshot.ts (validator + formatter over the engine's
+                          Snapshot type), snapshot-svg.ts (Snapshot -> SVG string),
+                          Editor.svelte + ranges.ts (CodeMirror, tree-based selection)
 tools/                    repo-level dev tooling, not shipped
   width-oracle/           emits per-code-point widths from the unicode-width crate
+  lab-svg.ts              renders a lab snapshot (file or /lab URL) to PNG
 packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sibling)
   scripts/
     gen-width-data.ts     regenerates src/width-data.ts from the oracle
@@ -62,9 +75,91 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
                           order inside compounds and dodges an elkjs >= 0.11 crash
                           (model-order strategy on a compound containing a cycle).
                           Node widths forced even so centers land on integers.
+    engine/               the in-house layered layout engine (see "Layout engine"):
+                          types.ts (LayoutInput/LayoutResult/Trace), snapshot.ts (the
+                          lab's picture format), graph.ts (working model + import +
+                          toSnapshot), cycles.ts, layering.ts, ordering.ts,
+                          placement.ts, routing.ts, index.ts (layout(): the phases in
+                          order, direction transform, export)
+    layout-engine.ts      the mermaid bridge: Graph -> LayoutInput (cells, measured
+                          labels), LayoutResult -> Canvas; renderEngine / traceEngine.
+                          Not in the package index; the demo aliases it as
+                          `lovely-mermaid-engine`.
     layout-seq.ts         sequence diagrams (own model in diagrams/sequence.ts, own geometry)
     source-box.ts         the source framed in a titled box
 ```
+
+## Layout engine
+
+`src/engine/` is a generic layered engine: synchronous, dependency-free,
+integer geometry in whatever unit the caller's sizes use. `layout(input,
+trace?)` runs the phases in order on one working graph (`graph.ts`: every
+edge end is a port, long-edge dummies are real 1×0 nodes with ports, a
+reversed edge is stored in layout direction with a flag, `-1` = not yet
+assigned): cycles → layers → split → order (+ port sides, order, cells) →
+place (cross axis) → route. **Routing assigns the flow-axis coordinates**
+(band tops from track counts; a channel is `tracks + 2·channelGap` rows or
+one row when every edge is straight); `joinRoutes` concatenates a split
+edge's segments and reads a reversed one backwards; labels are placed
+post-hoc on the route. The engine lays out flow-down and transposes /
+mirrors the result for the other directions — sizes are transposed on the
+way in for LR/RL — so no phase and no drawer ever flips anything. `trace`
+receives a Snapshot after every phase, in the engine's frame.
+
+Skeleton status (2026-08-30): every phase is the simplest complete
+implementation (DFS cycle breaking, longest-path layering, declaration
+order, packed placement, one track per jogging edge, naive labels);
+self-loops are skipped with a warning; `docs/elk-layered.md` ch. 8 lists
+what each becomes.
+
+The bridge (`layout-engine.ts`) measures nodes from wrapped labels /
+compartments (no even-width forcing), turns `cardFrom`/`cardTo` into tail /
+head labels and the label into a center label, ignores subgraphs for now
+(nodes lay out flat), passes per-direction cell spacings (cross axis: 3/1/1
+columns for TB, 1/0/0 rows for LR), and paints the result with `drawBox` /
+`drawClassBox`, `segH`/`segV`, `junction` for the border tee at each port
+cell, heads in the cell before the port, `drawTextOverEdges` for labels.
+
+## Layout lab
+
+The engine's visualization. A **Snapshot** (`src/engine/snapshot.ts`) is a
+picture of a layered layout in progress — nodes (`kind` node/dummy/compound, `parent`, `w`/`h`, `layer`,
+`order`, `x`/`y`, `ports` with side + offset) and edges (`fromPort`/`toPort`,
+`reversed`, `route`, `label`) in unit-agnostic integers. Every geometric field is optional so one format covers every
+phase: no `layer` → parked in a column beside the picture, no `order` →
+declaration order,
+no `x`/`y` → a slot grid on that axis (bands stacked down, one slot column
+per occupant, dummies included), no port `pos` → the side's ports spread
+evenly, no `route` → a straight line between ports or facing sides. `snapshotSvg(snap, view)` is one pure function returning an
+SVG string plus stats (nodes, dummies, layers, crossings between adjacent
+layers, extent) and invariant warnings (edges not pointing down, overlaps);
+`/lab/[[data]]` takes a mermaid source, runs `traceEngine` on
+[generate], lists the phase snapshots as buttons, loads the chosen one into
+the editor (still hand-editable), and draws whatever the editor holds with
+pan/zoom and hover inspection (edges of the hovered node light up via CSS
+over inline attributes); source, JSON and view are packed into the URL
+like `/render`. The editor is CodeMirror (`lab/Editor.svelte`):
+JSON highlighting and inline parse errors, completions that read the
+syntax tree (`lab/ranges.ts`: keys of the enclosing object, node ids for
+`from`/`to`/`parent`, the referenced node's port ids, sides, kinds), and
+the two-way link to the picture off the same tree — every node, edge and
+port object has a text range, so a click in the picture selects its JSON,
+hovering marks it, and the caret's item is outlined in the picture; `tools/lab-svg.ts` renders the same function to PNG
+through inkscape, accepting a pasted lab URL — so a frame seen in the
+browser is reproducible on the command line. Points (route points, ports) name cells and are painted through the
+cell's middle (`+0.5`); rects name cell edges — so a row-10 run and a
+row-10 label coincide. A port is a border cell (N: row `y`, S: row
+`y+h-1`), routes run port cell to port cell, and box strokes are painted
+through the border-cell centres — where a terminal draws the frame — so
+ports sit on the stroke and routes end on it; at px scale the half-unit
+inset is invisible. Paint order is frames → nodes →
+edges → labels: an edge cutting through a box is an error that must stay
+visible. Provisional geometry is gray and dashed — a node without `x`, an
+edge without `route` — so a phase's leftovers stand out from its results.
+Colors are inline presentation attributes with `fill-opacity` (inkscape
+paints `rgba()` black). A reversed edge is stored in layout direction with the arrow at
+`from`; a reversed dummy chain therefore shows a head per segment until the
+engine emits chain membership.
 
 Adding a diagram type is one module in `diagrams/` plus one `DIAGRAMS` entry:
 the module owns its header keywords (`headers`), parser and layout glue, and

@@ -117,6 +117,55 @@ TD-only: three-row boxes have no off-centre side port). An A*
 router experiment lives on the `astar-routing` branch: works, legible,
 rejected as less disciplined than structured routing (see that commit).
 
+## [ ] Layout engine (started 2026-08-29)
+
+A new in-house layered layout engine, ELK-shaped (cycle breaking →
+layering → crossing minimization → placement → routing → labels), written
+generically — terminal is the first consumer, not the only one: input is
+sized nodes/edges/compounds, output is integer geometry in whatever unit
+the sizes came in; aspect and even-width rules belong to the consumer.
+Sync, zero deps. Lives inside `packages/lovely-mermaid` for now (may
+become its own package). Human in the loop throughout, so the
+visualization comes first and every phase must be viewable.
+
+- [x] Lab: Snapshot format (ports included), `snapshotSvg`, `/lab` page
+      (CodeMirror editor with completions and two-way selection, presets,
+      pan/zoom, hover, URL state), `tools/lab-svg.ts` to PNG.
+- [x] ELK dive (2026-08-29): `docs/elk-layered.md`, ~4.3k lines, source
+      cached at `~/.cache/checkouts/github.com/eclipse/elk`. Chapter 8
+      holds the per-phase decisions (pipeline shape, data model, P1–P5,
+      compound hybrid, options, corrections to older notes) and the
+      reading order per milestone — start there.
+- [x] Engine skeleton (2026-08-30): `src/engine/` with the working model,
+      trace, all phases as naive placeholders, direction transform;
+      `layout-engine.ts` bridge (Graph in, Canvas out); the lab runs
+      mermaid source through it with a phase stepper. Decided with it:
+      an outer candidate loop scoring the *real* cost (width, crossings,
+      label failures) will wrap the tail phases — keep every phase pure.
+- [ ] Corpus stats table (ours vs elkjs) once ordering exists.
+- [ ] Phases, each landing in the lab with a strategy A/B: cycles +
+      layering (longest path, then network simplex) + dummy chains;
+      ordering (barycenter sweeps, one snapshot per sweep); placement
+      (linear segments, then Brandes–Köpf in integers); routing (ports,
+      channel tracks, y from track counts, self-loops, feedback lanes)
+      + labels; compound (recursive with port dummies — to be decided).
+- [ ] Switch-over: registry routes flowchart/state/class/ER through the
+      engine, goldens regenerated, `layout.ts` shrinks to draw fns,
+      `layout-elk.ts` deleted.
+
+Decided: ports are first-class (every edge end is a port: node, side,
+order, position; free ports only until a consumer needs constraints;
+flow-aligned sides for normal edges, the perpendicular sides reserved for
+self-loops); reversed edges stay on the flow sides too, so a down edge
+and its return run side by side (no E/W special case).
+
+Decided by the ELK dive (details in `docs/elk-layered.md` ch. 8): labels
+post-hoc on the line (never label dummies); compound = hybrid (global
+cycle breaking, per-level segments with border-cell dummies in hidden
+first/last layers, bottom-up sizes, no hierarchical sweep, flow-aligned
+exits only); routing assigns layer positions; BK picks the smallest of
+four layouts; no RNG. Still deferred: network simplex timing, package split.
+
 ## Open questions
 
 - Parked ideas with data: truncating sequence message text at `MAX_LABEL`,
