@@ -2,28 +2,35 @@ import { expect } from 'bun:test'
 import type { LGraph } from '../src/engine/graph.ts'
 import { buildGraph, toSnapshot } from '../src/engine/graph.ts'
 
-export const spacing = { nodeNode: 3, nodeEdge: 1, edgeEdge: 1, channelGap: 1 }
+export const spacing = { nodeNode: 3, nodeEdge: 1, edgeEdge: 1, channelGap: 1, framePad: 1 }
 
 /**
  * A graph from `A>B` edges; `A>B:2` sets a minimum length, `A>B*3` a
  * weight, `A(10)` (anywhere in the list) a node width. An entry without
  * `>` just declares a node. Nodes are declared in order of first mention;
- * default size 5×3.
+ * default size 5×3. `groups` maps a compound id to its members — node
+ * ids, or other compound ids for nesting; an edge end naming a compound
+ * attaches to the compound.
  */
-export function graph(items: string[]): LGraph {
+export function graph(items: string[], groups: Record<string, string[]> = {}): LGraph {
   const strip = (e: string): string => e.replace(/[:*]\d+/g, '').replace(/\(\d+\)/g, '')
   const widths = new Map<string, number>()
   for (const m of items.join(' ').matchAll(/(\w+)\((\d+)\)/g)) widths.set(m[1], Number(m[2]))
-  const ids = [...new Set(items.flatMap((e) => strip(e).split('>')))]
+  const parent = new Map<string, string>()
+  for (const [c, members] of Object.entries(groups)) for (const m of members) parent.set(m, c)
+  const ids = [
+    ...new Set([...items.flatMap((e) => strip(e).split('>')), ...Object.values(groups).flat()]),
+  ].filter((id) => !(id in groups))
   const edges = items.filter((e) => e.includes('>'))
   const g = buildGraph({
     dir: 'down',
     spacing,
-    nodes: ids.map((id) => ({ id, w: widths.get(id) ?? 5, h: 3 })),
+    nodes: ids.map((id) => ({ id, w: widths.get(id) ?? 5, h: 3, parent: parent.get(id) })),
     edges: edges.map((e, i) => {
       const [from, to] = strip(e).split('>')
       return { id: `e${i}`, from, to }
     }),
+    compounds: Object.keys(groups).map((id) => ({ id, parent: parent.get(id), titleW: 3 })),
   })
   edges.forEach((e, i) => {
     g.edges[i].minLen = Number(e.match(/:(\d+)/)?.[1] ?? 1)

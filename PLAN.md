@@ -153,13 +153,17 @@ visualization comes first and every phase must be viewable.
       crossing-cost dependencies, X-splitting, tracks → band rows), all
       live in the lab; the bridge renders real terminal output; phases
       are pure `graph → graph`. 2026-08-30.
-- [ ] Phases still to land, each with a strategy A/B in the lab:
-      routing extras (self-loops, port capacity → merged cells / wider
-      nodes, y
-      from track counts, self-loops) + labels; compound = **global**
-      (border nodes + nesting edges in layering, contiguous blocks in
-      ordering, border dummies in placement) — decided over the recursive
-      ELK scheme for cross-frame optimality; see CODE.md.
+- [x] Compounds, global scheme (2026-08-30): border rows at import,
+      nesting edges in layering, frame-aware dummy parents + side columns
+      at split, block sort with sibling-order constraints, border chains
+      win in placement, frames in the result, bridge maps groups and
+      paints frames + titles, lab shows frames. Verdict on the arch
+      corpus: correct but wide (731 vs 312 columns), frames tall, edges
+      through frame interiors — the trade-off to judge next (candidate
+      loop / hybrid with opaque frames for closed subgraphs).
+- [ ] Still to land: labels; routing extras (self-loops, port capacity →
+      merged cells / wider nodes); subgraph `direction` override for
+      closed subgraphs (opaque node laid out on its own).
 - [ ] Switch-over: registry routes flowchart/state/class/ER through the
       engine, goldens regenerated, `layout.ts` shrinks to draw fns,
       `layout-elk.ts` deleted.

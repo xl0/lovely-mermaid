@@ -6,7 +6,7 @@ import type { LayoutInput, Snapshot } from '../src/engine/index.ts'
 import { layout, PHASES } from '../src/engine/index.ts'
 import { importGraph, renderEngine, traceEngine } from '../src/layout-engine.ts'
 
-const spacing = { nodeNode: 3, nodeEdge: 1, edgeEdge: 1, channelGap: 1 }
+const spacing = { nodeNode: 3, nodeEdge: 1, edgeEdge: 1, channelGap: 1, framePad: 1 }
 const input: LayoutInput = {
   dir: 'down',
   spacing,

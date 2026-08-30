@@ -17,10 +17,13 @@
  * through a free column. Remaining cycles are broken greedily, tracks are
  * longest paths over the dependencies, straight edges take no track.
  *
+ * A compound frame whose title runs along the flow axis (`minSpan`) gets
+ * the missing rows added to the channel under its top row.
+ *
  * Phase 6, labels, is still a pass-through. `joinRoutes` is plumbing.
  */
 import type { LEdge, LGraph, LNode, LPort } from './graph.ts'
-import { cloneGraph } from './graph.ts'
+import { borderNode, cloneGraph } from './graph.ts'
 import type { LabelOptions, Pt, RoutingOptions } from './types.ts'
 
 export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
@@ -35,20 +38,37 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
   const channels: Channel[] = []
   for (let l = 0; l + 1 < L; l++) {
     const segs: LEdge[] = []
-    for (const n of g.layers[l]) for (const p of n.ports) for (const e of p.out) segs.push(e)
+    for (const n of g.layers[l]) {
+      for (const p of n.ports) for (const e of p.out) if (e.border !== true) segs.push(e)
+    }
     channels.push(routeChannel(segs, col, g.warnings))
   }
   // Band tops from the track counts; nodes sit at the top of their band.
-  const top: number[] = []
-  let y = 0
-  for (let l = 0; l < L; l++) {
-    top.push(y)
-    for (const n of g.layers[l]) n.y = y
-    y += bandH[l]
-    if (l + 1 < L) {
-      const ch = channels[l]
-      ch.first = y + gapRows
-      y += ch.tracks === 0 ? 1 : ch.tracks + 2 * gapRows
+  // `extra[l]` rows widen the channel under layer l for a frame's minSpan.
+  const extra = new Int32Array(L)
+  const place = (): void => {
+    let y = 0
+    for (let l = 0; l < L; l++) {
+      for (const n of g.layers[l]) n.y = y
+      y += bandH[l]
+      if (l + 1 < L) {
+        const ch = channels[l]
+        ch.first = y + gapRows + extra[l]
+        y += (ch.tracks === 0 ? 1 : ch.tracks + 2 * gapRows) + extra[l]
+      }
+    }
+  }
+  place()
+  // lowest frames first: rows added under a top row never shorten a frame
+  // whose top row lies below it
+  const frames = g.compounds
+    .map((c) => ({ c, top: borderNode(g, c.id, 'top'), bottom: borderNode(g, c.id, 'bottom') }))
+    .sort((a, b) => b.top.layer - a.top.layer)
+  for (const { c, top, bottom } of frames) {
+    const short = c.minSpan - (bottom.y - top.y + 1)
+    if (short > 0 && top.layer + 1 < L) {
+      extra[top.layer] += short
+      place()
     }
   }
   // Pass 2: routes. A dummy is one cell at the top of its band, so the

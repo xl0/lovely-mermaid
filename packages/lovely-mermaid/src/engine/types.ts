@@ -21,6 +21,26 @@ export interface InputNode {
   label?: string
   w: number
   h: number
+  /** the compound this node belongs to */
+  parent?: string
+}
+
+/**
+ * A subgraph. Its frame is not a node: the engine represents it by border
+ * nodes (a top and a bottom row, left and right columns) and lays out one
+ * global graph, so cross-frame edges stay short and layers align. An edge
+ * to a compound enters its top row, one from a compound leaves its bottom.
+ */
+export interface InputCompound {
+  id: string
+  label?: string
+  parent?: string
+  /** cross-axis units the top and bottom rows must offer, corners excluded
+   * (the title of a vertical flow sits there) */
+  titleW?: number
+  /** least flow-axis extent of the frame, border rows included (a sideways
+   * flow puts the title along it) */
+  minSpan?: number
 }
 
 export interface InputLabel {
@@ -49,12 +69,15 @@ export interface Spacing {
   nodeEdge: number
   edgeEdge: number
   channelGap: number
+  /** cross-axis units between a frame's border and what is beside it */
+  framePad: number
 }
 
 export interface LayoutInput {
   dir: Dir
   nodes: InputNode[]
   edges: InputEdge[]
+  compounds?: InputCompound[]
   spacing: Spacing
 }
 
@@ -106,6 +129,8 @@ export interface LayoutResult {
   height: number
   /** Rectangles of the nodes that were placed, absolute, in the requested direction. */
   nodes: Record<string, Rect>
+  /** Frames of the compounds that were placed, border cells included. */
+  compounds: Record<string, Rect>
   /** Per input edge that was routed: the polyline from source to target,
    * port cell to port cell, plus every label the engine found room for. */
   edges: Record<string, { route: Pt[]; labels: PlacedLabel[] }>

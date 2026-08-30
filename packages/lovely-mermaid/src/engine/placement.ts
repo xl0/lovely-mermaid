@@ -11,6 +11,11 @@
  * every coordinate stays an integer. `networkSimplex` is the second
  * strategy: the auxiliary graph of ch. 4 §3 solved by `nsSolve`, weights
  * 4/8/32 favouring straight long edges.
+ *
+ * A compound frame's left and right columns are border dummies chained
+ * by border edges (added with the long-edge dummies), so both placers keep
+ * each column straight like a long edge. `framePad` is the gap on both
+ * sides of a border.
  */
 import type { LEdge, LGraph, LNode } from './graph.ts'
 import { cloneGraph } from './graph.ts'
@@ -31,6 +36,7 @@ export function placeNodes(g0: LGraph, opts: PlacementOptions, trace?: PlaceTrac
 
 /** Cross-axis gap between two neighbours in a layer, by what they are. */
 export function gap(sp: Spacing, a: LNode, b: LNode): number {
+  if (a.kind === 'border' || b.kind === 'border') return sp.framePad
   if (a.kind === 'node' && b.kind === 'node') return sp.nodeNode
   if (a.kind === 'dummy' && b.kind === 'dummy') return sp.edgeEdge
   return sp.nodeEdge
@@ -96,15 +102,34 @@ function brandesKoepf(g: LGraph, trace?: PlaceTrace): Map<LNode, number> {
 /**
  * Type-1 conflicts: an edge between two dummies (an inner segment) must
  * stay straight, so any ordinary edge crossing it is marked and never used
- * for alignment. The paper's Alg. 1 with 0-based indices.
+ * for alignment. The paper's Alg. 1 with 0-based indices, run twice: first
+ * with the frame-border chains as the only inner segments, so that even a
+ * long edge entering a frame through its side bends rather than the
+ * frame; then with the unmarked dummy segments.
  */
 function markConflicts(layers: LNode[][], upper: Map<LNode, Neighbour[]>): Set<LEdge> {
   const marked = new Set<LEdge>()
-  const inner = (v: LNode): Neighbour | undefined => {
-    if (v.kind !== 'dummy') return undefined
-    const u = (upper.get(v) as Neighbour[])[0]
-    return u !== undefined && u.node.kind === 'dummy' ? u : undefined
+  const first = (v: LNode): Neighbour | undefined => (upper.get(v) as Neighbour[])[0]
+  const border = (v: LNode): Neighbour | undefined => {
+    const u = first(v)
+    return u?.edge.border === true ? u : undefined
   }
+  const segment = (v: LNode): Neighbour | undefined => {
+    const u = first(v)
+    if (u === undefined || marked.has(u.edge)) return undefined
+    return u.edge.border === true || (v.kind === 'dummy' && u.node.kind === 'dummy') ? u : undefined
+  }
+  markCrossing(layers, upper, border, marked)
+  markCrossing(layers, upper, segment, marked)
+  return marked
+}
+
+function markCrossing(
+  layers: LNode[][],
+  upper: Map<LNode, Neighbour[]>,
+  inner: (v: LNode) => Neighbour | undefined,
+  marked: Set<LEdge>,
+): void {
   for (let i = 0; i + 1 < layers.length; i++) {
     const cur = layers[i + 1]
     let k0 = 0
@@ -127,7 +152,6 @@ function markConflicts(layers: LNode[][], upper: Map<LNode, Neighbour[]>): Set<L
       }
     }
   }
-  return marked
 }
 
 /** The cell offset at which `e` leaves / enters `n`. */
@@ -313,11 +337,13 @@ function networkSimplexPlace(g: LGraph): Map<LNode, number> {
     const t = index.get(e.dst.node) as number
     const d = count++
     const w =
-      e.src.node.kind === 'dummy' && e.dst.node.kind === 'dummy'
-        ? 32
-        : e.src.node.kind === 'dummy' || e.dst.node.kind === 'dummy'
-          ? 8
-          : 4
+      e.border === true
+        ? 64
+        : e.src.node.kind === 'dummy' && e.dst.node.kind === 'dummy'
+          ? 32
+          : e.src.node.kind === 'dummy' || e.dst.node.kind === 'dummy'
+            ? 8
+            : 4
     const ps = e.src.pos
     const pt = e.dst.pos
     edges.push({ s: d, t: s, w, delta: Math.max(0, pt - ps) })

@@ -159,29 +159,55 @@ free column, as ELK does; greedy FAS over the dependencies, tracks by
 longest path, straight edges take no track; channel height = tracks + 2
 gap rows (one row when everything is straight, for the arrowhead); band
 tops follow; a dummy spans its band. **labels** is still a pass-through.
-Self-loops are skipped at import with a warning. `docs/elk-layered.md`
-ch. 8 lists what remains.
+Self-loops are skipped at import with a warning. Compounds run through
+every phase (next paragraph). `docs/elk-layered.md` ch. 8 lists what
+remains.
 
-Compound graphs (decided 2026-08-30, superseding the dive's ch. 6/8
-recommendation): **one global layout**, Sander/dagre style — frames are
-constraints, not nodes. Each subgraph contributes top/bottom border nodes
-with nesting edges of minimum length (the layering already takes
-`minLen`), members form a contiguous block in ordering, left/right border
-dummies (1 cell — the border column) in placement, frame = bounding box of
-its borders; routing is unchanged. Cross-frame edges stay short and
-straight, the pipeline stays flat (one graph, one snapshot per phase).
-Cost accepted: layer bands are shared across frames. A subgraph with a
-`direction` override and no crossing edges is laid out on its own and
-becomes an opaque node. Titles may be pierced: the tee keeps its glyph
-under the letters and the colour tells the edge.
+Compound graphs (2026-08-30, superseding the dive's ch. 6/8
+recommendation): **one global layout**, Sander/dagre style — a frame is
+not a node but a set of `border` nodes in the flat graph, and every node
+carries its `parent`. Import creates a compound's top and bottom rows
+(1 unit high, `titleW + 2` wide so the title fits; an edge to a compound
+enters its top row, one from it leaves its bottom). Layering adds
+temporary nesting edges (top → member → bottom, top → child top, child
+bottom → bottom, weight 1 so the rows hug the members; an edge from a
+member up to its own frame's top row is reversed first) and removes them
+once layers exist. Split gives each dummy the innermost compound of
+either end whose layers cover it (else the common one), so a leaving edge
+stays inside down to the bottom row and pierces that, and then adds the
+left/right *columns*: a 1×0 border dummy at each end of the compound's
+block in every spanned layer, chained by `border` edges. Ordering sorts a
+layer as a tree of blocks (`sortBlock`: block barycenter = sum of the
+members', side dummies pinned at the ends, sibling blocks that continue
+into the fixed layer keep its order by merging violators — dagre's
+subgraph constraints — so side columns never cross; the greedy switch
+only swaps siblings). Placement treats border chains as inner segments
+that always win (two-tier conflict marking: everything crossing a border
+chain is marked first, so an edge entering a frame through its side bends
+and the frame stays straight; the NS placer weights them 64), with
+`framePad` on both sides of a border. Routing skips border edges; a
+frame whose title runs along the flow (`minSpan`, set by `layout()` for
+LR/RL from `titleW`) gets the missing rows added under its top row. The
+frame is the box of its borders (`frameOf`), returned in
+`LayoutResult.compounds`. What it looks like on the arch corpus: frames
+are consistent and nested, but every frame spans all layers between its
+first and last member, sibling frames with overlapping spans line up
+side by side, and other frames' edges route through frame interiors —
+`arch-system` is 731×162 cells against the recursive renderer's 312×182.
+A subgraph `direction` override is ignored for now.
 
 The bridge (`layout-engine.ts`) measures nodes from wrapped labels /
 compartments (no even-width forcing), turns `cardFrom`/`cardTo` into tail /
-head labels and the label into a center label, ignores subgraphs for now
-(nodes lay out flat), passes per-direction cell spacings (cross axis: 3/1/1
-columns for TB, 1/0/0 rows for LR), and paints the result with `drawBox` /
-`drawClassBox`, `segH`/`segV`, `junction` for the border tee at each port
-cell, heads in the cell before the port, `drawTextOverEdges` for labels.
+head labels and the label into a center label, maps groups to compounds
+(`g<i>`, title width from the fitted label; a node standing in for a
+subgraph is dropped and its edges attach to the compound), passes
+per-direction cell spacings (cross axis: 3/1/1 columns + 1 frame pad for
+TB, 1/0/0 rows + 0 for LR), and paints the result: frames first as a
+perimeter of border bits (no occupancy — boxes and edges lie inside) with
+the nesting depth over the rect, then `drawBox` / `drawClassBox`,
+`segH`/`segV`, `junction` for the border tee at each port cell, heads in
+the cell before the port, `drawTextOverEdges` for labels and, last, frame
+titles over whatever pierces the top row.
 
 ## Layout lab
 
