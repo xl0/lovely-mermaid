@@ -90,7 +90,10 @@ export type Phase = (typeof PHASES)[number]
 // Per-phase knobs. The demo's lab mirrors these in its option controls
 // (demo/src/lib/lab/Options.svelte) — keep the two in sync.
 export interface CyclesOptions {
-  strategy?: 'greedy' | 'dfs'
+  /** `greedy2` is greedy with stalemate ties broken from the last
+   * declared node instead of the first — a cheap diversity source the
+   * loop exploits (it sole-wins some graphs) */
+  strategy?: 'greedy' | 'dfs' | 'greedy2'
 }
 export interface LayeringOptions {
   strategy?: 'networkSimplex' | 'longestPath'
@@ -110,7 +113,10 @@ export interface OrderingOptions {
   greedySwitch?: boolean
 }
 export interface PlacementOptions {
-  strategy?: 'bk' | 'networkSimplex'
+  /** `ns2` is networkSimplex with flat edge weights (4/2/1 instead of
+   * 32/8/4): long chains bend more readily, which packs some graphs
+   * tighter */
+  strategy?: 'bk' | 'networkSimplex' | 'ns2'
   /** break equal-width candidate ties by the rows' summed extents (set on
    * the root level; inner levels stay stable so frame ports do not move
    * between equally narrow inner picks) */
@@ -128,6 +134,13 @@ export interface LayoutOptions {
    * against the *measured* band extents toward this width and re-run the
    * later phases (kept only when the measured result does not regress) */
   squeeze?: number
+  /** most squeeze iterations to attempt (default 12); the loop probes
+   * with a small budget and gives the winner the full one */
+  squeezeBudget?: number
+  /** when the squeeze target is unreachable, keep packing toward the
+   * width already paid: admission follows the measured width instead of
+   * the target (the accept guard still ratchets width down) */
+  squeezeLoose?: boolean
   cycles?: CyclesOptions
   layering?: LayeringOptions
   ordering?: OrderingOptions
@@ -151,6 +164,8 @@ export interface LayoutResult {
    * port cell to port cell, plus every label the engine found room for. */
   edges: Record<string, { route: Pt[]; labels: PlacedLabel[] }>
   warnings: string[]
+  /** squeeze iterations that were kept, when geometry feedback ran */
+  squeezed?: number
 }
 
 /** Receives one snapshot after import and after each phase, in the engine's internal frame. */
@@ -161,7 +176,7 @@ export interface FitOptions {
   /** target cross-axis extent in the caller's units (a terminal's columns
    * for a vertical flow); absent = just minimize */
   width?: number
-  /** most layouts to try (default 12) */
+  /** most layouts to try (default 16) */
   budget?: number
 }
 

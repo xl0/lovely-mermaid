@@ -29,15 +29,18 @@ import { joinRoutes, placeLabels, routeEdges } from './routing.ts'
 import type { SEdge, SNode, Snapshot } from './snapshot.ts'
 import type {
   Candidate,
+  CyclesOptions,
   Dir,
   FitOptions,
   InputEdge,
   InputNode,
+  LayeringOptions,
   LayoutInput,
   LayoutOptions,
   LayoutResult,
   Phase,
   PlacedLabel,
+  PlacementOptions,
   Pt,
   Rect,
   Spacing as SpacingT,
@@ -101,6 +104,7 @@ interface Level {
 export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Trace): LayoutResult {
   const sideways = input.dir === 'right' || input.dir === 'left'
   const warnings: string[] = []
+  let squeezed: number | undefined
   const compounds = input.compounds ?? []
 
   // --- the hierarchy: parent of every node and compound, unknown or
@@ -229,6 +233,7 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
     g = breakCycles(g, opts.cycles ?? {})
     emit(g, 'cycles')
     const levels = new Map<string, Level>()
+    const lopts: LayeringOptions = opts.layering ?? {}
     if (opts.until !== 'cycles') {
       // A side must offer its ports the same pitch the channels give
       // parallel edges (a cell per edge plus `edgeEdge` between, corners
@@ -283,10 +288,7 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
       // which order the outside wants to meet each border, the specs take
       // that order, and the child's rim rows keep it (ordering pins them).
       if (children.some((c) => (childSpecs.get(c.id) as PortSpec[]).length > 1)) {
-        const pre = orderNodes(
-          splitLongEdges(assignLayers(g, opts.layering ?? {})),
-          opts.ordering ?? {},
-        )
+        const pre = orderNodes(splitLongEdges(assignLayers(g, lopts)), opts.ordering ?? {})
         for (const c of children) {
           const specs = childSpecs.get(c.id) as PortSpec[]
           if (specs.length < 2) continue
@@ -340,7 +342,7 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
       }
       const gBase = g // pure phases: the pre-layering state stays intact
       const steps: [Phase, (g: LGraph) => LGraph][] = [
-        ['layers', (g) => assignLayers(g, opts.layering ?? {})],
+        ['layers', (g) => assignLayers(g, lopts)],
         ['split', splitLongEdges],
         ['order', (g) => orderNodes(g, opts.ordering ?? {}, (h, note) => emit(h, 'order', note))],
         [
@@ -363,14 +365,17 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
       // the later phases, and keep the result only when the measurement
       // itself does not regress.
       if (scope === null && opts.squeeze !== undefined && opts.until === undefined) {
+        squeezed = 0
         // one row evacuation per iteration: each accepted move is
         // re-measured before the next, so its real cost (new trunk
         // columns from longer edges) informs the following decision;
         // a rejected row is remembered and not retried on the same
         // geometry
-        const tried = new Set<number>()
-        for (let iter = 0; iter < 12; iter++) {
-          const mv = squeezeMoves(gBase, g, opts.squeeze, tried)
+        const tried = new Set<string>()
+        for (let iter = 0; iter < (opts.squeezeBudget ?? 12); iter++) {
+          const room =
+            opts.squeezeLoose === true ? Math.max(opts.squeeze, measure(g)[0]) : opts.squeeze
+          const mv = squeezeMoves(gBase, g, room, tried)
           if (mv === null) break
           let h = applyLayers(gBase, mv.forced)
           h = splitLongEdges(h)
@@ -381,11 +386,12 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
           const [w0, h0] = measure(g)
           const [w1, h1] = measure(h)
           if (w1 > Math.max(opts.squeeze, w0) || h1 >= h0) {
-            tried.add(mv.row)
+            tried.add(mv.key)
             continue
           }
           g = h
           tried.clear()
+          squeezed++
           emit(g, 'labels', `squeeze ${iter + 1} · ${w1}×${h1}`)
         }
       }
@@ -467,6 +473,7 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
     compounds: root.compounds,
     edges: {},
     warnings,
+    ...(squeezed === undefined ? {} : { squeezed }),
   }
   for (const [id, route] of root.routes) {
     result.edges[id] = { route, labels: root.labels.get(id) ?? [] }
@@ -476,6 +483,24 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
     trace(flatSnapshot(final, input))
   }
   return final
+}
+
+/**
+ * The streaming mode: one deterministic greedy+bk pass, staggered
+ * toward the target when one is given — the strongest single
+ * configuration on the corpus, a few tens of ms where the loop spends
+ * hundreds. Best-effort: the cap is an estimate, so the result may
+ * exceed the width. Re-run per streamed update; run `layoutBest` once
+ * the source has settled.
+ */
+export function layoutFast(input: LayoutInput, fit: FitOptions = {}, trace?: Trace): LayoutResult {
+  const sideways = input.dir === 'right' || input.dir === 'left'
+  const opts: LayoutOptions = {
+    cycles: { strategy: 'greedy' },
+    placement: { strategy: 'bk' },
+    ...(fit.width !== undefined && !sideways ? { layering: { maxWidth: fit.width } } : {}),
+  }
+  return layout(input, opts, trace)
 }
 
 /**
@@ -496,24 +521,47 @@ export function layoutBest(
   fit: FitOptions = {},
   trace?: Trace,
 ): { result: LayoutResult; chosen: LayoutOptions; candidates: Candidate[] } {
-  const budget = Math.max(1, fit.budget ?? 12)
+  const budget = Math.max(1, fit.budget ?? 16)
   const target = fit.width
   const sideways = input.dir === 'right' || input.dir === 'left'
-  const cyclesDim =
-    opts.cycles?.strategy !== undefined ? [opts.cycles.strategy] : (['greedy', 'dfs'] as const)
-  const placeDim =
-    opts.placement?.strategy !== undefined
-      ? [opts.placement.strategy]
-      : (['bk', 'networkSimplex'] as const)
+  type Cy = NonNullable<CyclesOptions['strategy']>
+  type Pl = NonNullable<PlacementOptions['strategy']>
+  // the probe cells: of the full 3×3, only these ever won on the corpus
+  // (greedy2 only pays off with networkSimplex, ns2 never with greedy2)
+  // — the two slots saved go to the cap ladder instead
+  const CELLS: [Cy, Pl][] = [
+    ['greedy', 'bk'],
+    ['greedy', 'networkSimplex'],
+    ['greedy', 'ns2'],
+    ['dfs', 'bk'],
+    ['dfs', 'networkSimplex'],
+    ['dfs', 'ns2'],
+    ['greedy2', 'networkSimplex'],
+  ]
+  const cyPin = opts.cycles?.strategy
+  const plPin = opts.placement?.strategy
+  const cells: [Cy, Pl][] =
+    cyPin !== undefined && plPin !== undefined
+      ? [[cyPin, plPin]]
+      : cyPin !== undefined
+        ? (['bk', 'networkSimplex', 'ns2'] as Pl[]).map((pl) => [cyPin, pl])
+        : plPin !== undefined
+          ? (['greedy', 'dfs', 'greedy2'] as Cy[]).map((cy) => [cy, plPin])
+          : CELLS
   const candidates: Candidate[] = []
   const results: LayoutResult[] = []
-  const run = (
-    cy: (typeof cyclesDim)[number],
-    pl: (typeof placeDim)[number],
-    cap: number | undefined,
-    packW?: number,
-  ): Candidate | null => {
-    if (candidates.length >= budget) return null
+  // geometry feedback (squeeze) is the costliest step: probes get a
+  // small iteration budget — enough for the cap ladder to rank
+  // post-squeeze geometry — and only the winner gets the full one, in
+  // a reserved budget slot
+  // reserved only when the budget covers the probe cells, so a small
+  // budget degrades to fewer probes instead of an empty dry loop
+  const finalists =
+    target !== undefined && !sideways && opts.squeeze === undefined
+      ? Math.min(2, Math.max(0, budget - cells.length))
+      : 0
+  const run = (cy: Cy, pl: Pl, cap: number | undefined, packW?: number): Candidate | null => {
+    if (candidates.length >= budget - finalists) return null
     const o: LayoutOptions = {
       ...opts,
       cycles: { ...opts.cycles, strategy: cy },
@@ -523,7 +571,9 @@ export function layoutBest(
         ...(cap === undefined ? {} : { maxWidth: cap }),
         ...(packW === undefined ? {} : { packWidth: packW }),
       },
-      ...(target === undefined || opts.squeeze !== undefined ? {} : { squeeze: target }),
+      ...(target === undefined || opts.squeeze !== undefined
+        ? {}
+        : { squeeze: target, squeezeBudget: 2 }),
     }
     const res = layout(input, o)
     const c: Candidate = {
@@ -549,15 +599,14 @@ export function layoutBest(
     for (let i = 1; i < candidates.length; i++) if (better(candidates[i], candidates[k])) k = i
     return k
   }
-  for (const cy of cyclesDim) for (const pl of placeDim) run(cy, pl, opts.layering?.maxWidth)
+  for (const [cy, pl] of cells) run(cy, pl, opts.layering?.maxWidth)
   if (
     target !== undefined &&
     !sideways &&
     opts.layering?.maxWidth === undefined &&
     !candidates.some((c) => c.fits === true)
   ) {
-    const comboOf = (c: Candidate): [(typeof cyclesDim)[number], (typeof placeDim)[number]] =>
-      c.label.split('+cap')[0].split('+') as [(typeof cyclesDim)[number], (typeof placeDim)[number]]
+    const comboOf = (c: Candidate): [Cy, Pl] => c.label.split('+cap')[0].split('+') as [Cy, Pl]
     // only the two most promising uncapped probes advance to the capped
     // phase — the spared budget lets the cap ladder dig deeper, which
     // wins more fits than a broad shallow sweep does
@@ -569,13 +618,24 @@ export function layoutBest(
     const capOf = (c: Candidate): number | undefined => c.opts.layering?.maxWidth
     const tried = (cy: string, pl: string, cap: number): boolean =>
       candidates.some((c) => c.label === `${cy}+${pl}+cap${cap}`)
-    // tighten until something fits
-    for (let refine = 0; refine < 3; refine++) {
+    // tighten until something fits: by the observed overshoot, but never
+    // slower than a geometric descent — the cap↔width curve is
+    // non-monotonic, and the first stall often hides a deeper minimum
+    // (arch-system@134 fits at cap48 while cap95 renders wider than
+    // cap134)
+    for (let refine = 0; refine < 8; refine++) {
       const b = candidates[best()]
       if (b.fits === true) break
-      const cap = target - (b.width - target)
       const [cy, pl] = comboOf(b)
-      if (cap <= 0 || tried(cy, pl, cap)) break
+      const caps = candidates
+        .filter((c) => {
+          const [a, b2] = comboOf(c)
+          return a === cy && b2 === pl && capOf(c) !== undefined
+        })
+        .map((c) => capOf(c) as number)
+      const lowest = caps.length > 0 ? Math.min(...caps) : target
+      const cap = Math.max(4, Math.min(target - (b.width - target), Math.round(lowest * 0.7)))
+      if (tried(cy, pl, cap)) break
       if (run(cy, pl, cap) === null) break
     }
     // then loosen: bisect toward the widest cap that still fits — a
@@ -600,6 +660,31 @@ export function layoutBest(
         if (c.fits === true) lo = mid
         else hi = mid
       }
+    }
+  }
+  if (finalists > 0) {
+    const ranked = [...candidates].sort((a, b) => (better(a, b) ? -1 : 1))
+    const anyFits = candidates.some((c) => c.fits === true)
+    let done = 0
+    for (const c of ranked) {
+      if (done >= finalists || candidates.length >= budget) break
+      // a probe whose cheap squeeze kept nothing will not turn around
+      // with the full budget — skip it. When nothing fits the probes
+      // squeezed against an unreachable target, so their silence says
+      // nothing: the finalists run with the width already paid for as
+      // the packing budget instead (the guard still forbids widening).
+      if (anyFits && (results[candidates.indexOf(c)].squeezed ?? 0) === 0) continue
+      const o: LayoutOptions = { ...c.opts, squeeze: target, squeezeBudget: 24, squeezeLoose: true }
+      const res = layout(input, o)
+      candidates.push({
+        label: `${c.label}+sq`,
+        opts: o,
+        width: res.width,
+        height: res.height,
+        fits: res.width <= (target as number),
+      })
+      results.push(res)
+      done++
     }
   }
   const k = best()
@@ -659,8 +744,8 @@ function squeezeMoves(
   base: LGraph,
   routed: LGraph,
   target: number,
-  skip: Set<number>,
-): { row: number; forced: Map<string, number> } | null {
+  skip: Set<string>,
+): { key: string; forced: Map<string, number> } | null {
   // band rows and measured extents
   const bandTop = new Map<number, number>()
   const bandBottom = new Map<number, number>()
@@ -669,62 +754,24 @@ function squeezeMoves(
     bandTop.set(n.layer, Math.min(bandTop.get(n.layer) ?? n.y, n.y))
     bandBottom.set(n.layer, Math.max(bandBottom.get(n.layer) ?? 0, n.y + Math.max(1, n.h) - 1))
   }
-  const layerAtRow = (y: number): number | undefined => {
-    for (const [l, top] of bandTop) if (y >= top && y <= (bandBottom.get(l) as number)) return l
-    return undefined
-  }
-  const occ = new Map<number, [number, number][]>()
-  const put = (l: number | undefined, x0: number, x1: number): void => {
-    if (l === undefined || x1 <= x0) return
-    const list = occ.get(l)
-    if (list === undefined) occ.set(l, [[x0, x1]])
-    else list.push([x0, x1])
-  }
-  const merge = (list: [number, number][]): [number, number][] => {
-    list.sort((a, b) => a[0] - b[0])
-    const out: [number, number][] = []
-    for (const iv of list) {
-      const last = out[out.length - 1]
-      if (last !== undefined && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1])
-      else out.push([iv[0], iv[1]])
-    }
-    return out
-  }
-  for (const n of routed.nodes) {
-    if (n.layer < 0 || n.x < 0) continue
-    put(n.layer, n.x, n.x + Math.max(1, n.w) + 2 * (n.loops ?? 0))
-  }
+  // Measured width demand per band: what its nodes need plus a column
+  // per trunk passing through. Demand, not occupancy intervals, judges
+  // whether a node fits — routed columns spread across the free width
+  // fragment every gap, but placement re-routes them out of the way the
+  // moment the node arrives, so position-specific gaps under-admit
+  // (the accept guard catches the cases where placement cannot).
+  const pass = new Map<number, number>()
   for (const e of routed.edges) {
     const r = e.route ?? []
     for (let i = 1; i < r.length; i++) {
       const [x0, y0] = r[i - 1] as Pt
       const [x1, y1] = r[i] as Pt
-      if (x0 === x1) {
-        // a vertical run occupies its column in every band it crosses
-        const [ya, yb] = y0 < y1 ? [y0, y1] : [y1, y0]
-        for (const [l, top] of bandTop)
-          if (ya <= (bandBottom.get(l) as number) && yb >= top) put(l, x0, x0 + 1)
-      } else put(layerAtRow(y0), Math.min(x0, x1), Math.max(x0, x1) + 1)
+      if (x0 !== x1) continue
+      // a vertical run costs a column in every band it fully crosses
+      const [ya, yb] = y0 < y1 ? [y0, y1] : [y1, y0]
+      for (const [l, top] of bandTop)
+        if (ya <= top && yb >= (bandBottom.get(l) as number)) pass.set(l, (pass.get(l) ?? 0) + 1)
     }
-  }
-  for (const [l, list] of occ) occ.set(l, merge(list))
-  // first gap in the band (occupancy plus this row's tentative moves,
-  // clipped to the target) that fits the width, or null
-  const takeGap = (
-    t: number,
-    vw: number,
-    tent: Map<number, [number, number][]>,
-  ): [number, number] | null => {
-    const list = merge(
-      [...(occ.get(t) ?? []), ...(tent.get(t) ?? [])].map((iv) => [...iv] as [number, number]),
-    )
-    let x = 0
-    for (const [a, b] of list) {
-      if (Math.min(a, target) - x >= vw) return [x, x + vw]
-      x = Math.max(x, b)
-      if (x >= target) return null
-    }
-    return target - x >= vw ? [x, x + vw] : null
   }
   // current layers of the base (pre-split) nodes
   const layerOf = new Map<string, number>()
@@ -752,47 +799,79 @@ function squeezeMoves(
     else row.push(n)
   }
   const keys = [...rows.keys()].sort((a, b) => a - b)
+  const sp = base.spacing
+  const demand = new Map<number, number>()
+  for (const [l, row] of rows) {
+    let d = (pass.get(l) ?? 0) * (1 + sp.edgeEdge)
+    for (const n of row) d += n.w + 2 * (n.loops ?? 0) + sp.nodeNode
+    demand.set(l, d)
+  }
   const movable = (row: LNode[]): boolean => row.every((n) => n.at === undefined)
-  let moved: number | null = null
+  let moved: string | null = null
   const order = [...keys].sort(
     (a, b) => (rows.get(a) as LNode[]).length - (rows.get(b) as LNode[]).length || a - b,
   )
   for (const l of order) {
     const row = rows.get(l) as LNode[]
-    if (skip.has(l) || !movable(row) || row.length === 0) continue
-    const assign: [LNode, number, [number, number]][] = []
-    const tent = new Map<number, [number, number][]>()
+    if (skip.has(`row:${l}`) || !movable(row) || row.length === 0) continue
+    const assign: [LNode, number][] = []
+    const tent = new Map<number, number>()
     let ok = true
     for (const v of row) {
       let placed: number | null = null
       const targets = keys
         .filter((k) => k !== l && (rows.get(k) as LNode[]).length > 0)
         .sort((a, b) => Math.abs(a - l) - Math.abs(b - l) || a - b)
-      let gap: [number, number] | null = null
       for (const t of targets) {
         if (!movable(rows.get(t) as LNode[]) || !feasible(v.id, t)) continue
-        const vw = v.w + 2 * (v.loops ?? 0) + base.spacing.nodeNode
-        gap = takeGap(t, vw, tent)
-        if (gap === null) continue
+        const vw = v.w + 2 * (v.loops ?? 0) + sp.nodeNode
+        if ((demand.get(t) ?? 0) + (tent.get(t) ?? 0) + vw > target) continue
         placed = t
-        const list = tent.get(t)
-        if (list === undefined) tent.set(t, [gap])
-        else list.push(gap)
+        tent.set(t, (tent.get(t) ?? 0) + vw)
         break
       }
       if (placed === null) {
         ok = false
         break
       }
-      assign.push([v, placed, gap as [number, number]])
+      assign.push([v, placed])
     }
     if (!ok || assign.length === 0) continue
-    for (const [v, t, gp] of assign) {
+    for (const [v, t] of assign) {
       layerOf.set(v.id, t)
-      occ.set(t, merge([...(occ.get(t) ?? []), gp]))
+      demand.set(t, (demand.get(t) ?? 0) + v.w + 2 * (v.loops ?? 0) + sp.nodeNode)
     }
-    moved = l
+    moved = `row:${l}`
     break
+  }
+  // No whole row moved: a band is as tall as its tallest node, so try
+  // moving one tall node beside another tall band — the source band
+  // collapses to its shorter rest, the target grows by at most the
+  // overshoot. Net row gain decides.
+  if (moved === null) {
+    let best: { v: LNode; to: number; net: number } | null = null
+    for (const l of keys) {
+      const row = rows.get(l) as LNode[]
+      if (row.length < 2 || !movable(row)) continue
+      const sorted = [...row].sort((a, b) => b.h - a.h)
+      const v = sorted[0]
+      const gain = v.h - sorted[1].h
+      if (gain <= 0) continue
+      for (const t of keys) {
+        const trow = rows.get(t) as LNode[]
+        if (t === l || trow.length === 0 || !movable(trow) || !feasible(v.id, t)) continue
+        if (skip.has(`tall:${v.id}:${t}`)) continue
+        const vw = v.w + 2 * (v.loops ?? 0) + sp.nodeNode
+        if ((demand.get(t) ?? 0) + vw > target) continue
+        const growth = Math.max(0, v.h - Math.max(...trow.map((n) => n.h)))
+        const net = gain - growth
+        if (net > 0 && (best === null || net > best.net)) best = { v, to: t, net }
+      }
+    }
+    if (best !== null) {
+      layerOf.set(best.v.id, best.to)
+      moved = `tall:${best.v.id}:${best.to}`
+    }
   }
   if (moved === null) return null
   // drop layer values nothing uses, where every spanning base edge has slack
@@ -812,7 +891,7 @@ function squeezeMoves(
     if (!safe) continue
     for (const [id, lv] of layerOf) if (lv > v) layerOf.set(id, lv - 1)
   }
-  return { row: moved, forced: layerOf }
+  return { key: moved, forced: layerOf }
 }
 
 function dedupe(pts: Pt[]): Pt[] {
@@ -899,6 +978,7 @@ function transform(res: LayoutResult, dir: Dir): LayoutResult {
     compounds: {},
     edges: {},
     warnings: res.warnings,
+    ...(res.squeezed === undefined ? {} : { squeezed: res.squeezed }),
   }
   for (const [id, r] of Object.entries(res.nodes)) out.nodes[id] = rect(r)
   for (const [id, r] of Object.entries(res.compounds)) out.compounds[id] = rect(r)

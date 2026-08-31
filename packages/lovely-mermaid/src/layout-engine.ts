@@ -16,7 +16,7 @@ import { parseClass } from './diagrams/class.ts'
 import { parseEr } from './diagrams/er.ts'
 import { parseGraph } from './diagrams/flowchart.ts'
 import { parseState } from './diagrams/state.ts'
-import { layout, layoutBest } from './engine/index.ts'
+import { layout, layoutBest, layoutFast } from './engine/index.ts'
 import type { Snapshot } from './engine/snapshot.ts'
 import type {
   Candidate,
@@ -37,7 +37,7 @@ import { drawBox, drawClassBox, half, headGlyph, MAX_CANVAS_CELLS, sat } from '.
 import type { MermaidArt } from './types.ts'
 import { stringWidth } from './width.ts'
 
-export { layout, layoutBest } from './engine/index.ts'
+export { layout, layoutBest, layoutFast } from './engine/index.ts'
 export type { Pt, SEdge, SNode, Snapshot, SPort } from './engine/snapshot.ts'
 export type {
   Candidate,
@@ -258,6 +258,30 @@ export function traceEngine(
 ): { snapshots: Snapshot[]; art: MermaidArt | null } {
   const snapshots: Snapshot[] = []
   const art = renderEngine(src, opts, (s) => snapshots.push(s))
+  return { snapshots, art }
+}
+
+/** The streaming mode: `layoutFast` through the bridge — one cheap
+ * deterministic pass toward the width (best-effort, may exceed it).
+ * Re-run per streamed update; call `traceEngineFit` for the full
+ * render once the source settles. */
+export function traceEngineFast(
+  src: string,
+  fit: FitOptions = {},
+): { snapshots: Snapshot[]; art: MermaidArt | null } | null {
+  const p = prepare(src)
+  if (p === null) return null
+  const snapshots: Snapshot[] = []
+  const result = layoutFast(p.input, fit, (s) => snapshots.push(s))
+  const canvas = drawLayout(p.graph, result, p.lines)
+  const art =
+    canvas === null
+      ? null
+      : {
+          ...canvas.toLines(),
+          classDefs: p.graph.classDefs,
+          warnings: [...p.graph.warnings, ...result.warnings],
+        }
   return { snapshots, art }
 }
 

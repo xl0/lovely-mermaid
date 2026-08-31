@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { layout, layoutBest } from '../src/engine/index.ts'
+import { layout, layoutBest, layoutFast } from '../src/engine/index.ts'
 import type { Snapshot } from '../src/engine/snapshot.ts'
 import { inputOf } from './engine-helpers.ts'
 
@@ -9,7 +9,7 @@ describe('candidate loop', () => {
   test('searches free knobs, respects pinned ones, deterministically', () => {
     const input = inputOf(['A>B', 'B>C', 'C>A'])
     const a = layoutBest(input, { cycles: { strategy: 'dfs' } })
-    expect(a.candidates.length).toBe(2)
+    expect(a.candidates.length).toBe(3)
     for (const c of a.candidates) expect(c.label.startsWith('dfs+')).toBe(true)
     const b = layoutBest(input, { cycles: { strategy: 'dfs' } })
     expect(b.candidates).toEqual(a.candidates)
@@ -17,8 +17,11 @@ describe('candidate loop', () => {
     expect(free.candidates.map((c) => c.label)).toEqual([
       'greedy+bk',
       'greedy+networkSimplex',
+      'greedy+ns2',
       'dfs+bk',
       'dfs+networkSimplex',
+      'dfs+ns2',
+      'greedy2+networkSimplex',
     ])
   })
 
@@ -80,5 +83,35 @@ describe('candidate loop', () => {
     expect(flat).toBeDefined()
     const right = Math.max(...flat.nodes.map((n) => (n.x ?? 0) + (n.w ?? 1)))
     expect(right).toBeLessThanOrEqual(result.width)
+  })
+})
+
+describe('fast mode', () => {
+  test('layoutFast is one capped greedy+bk pass, deterministic', () => {
+    const input = inputOf(wide)
+    const fast = layoutFast(input, { width: 55 })
+    const again = layoutFast(input, { width: 55 })
+    expect(again).toEqual(fast)
+    const manual = layout(input, {
+      cycles: { strategy: 'greedy' },
+      placement: { strategy: 'bk' },
+      layering: { maxWidth: 55 },
+    })
+    expect(fast.width).toBe(manual.width)
+    expect(fast.height).toBe(manual.height)
+    // no target: plain uncapped pass
+    const free = layoutFast(input)
+    expect(free.width).toBe(
+      layout(input, { cycles: { strategy: 'greedy' }, placement: { strategy: 'bk' } }).width,
+    )
+  })
+
+  test('tiny loop budgets degrade instead of crashing', () => {
+    for (const budget of [1, 2, 3, 8]) {
+      const { result, candidates } = layoutBest(inputOf(wide), {}, { width: 55, budget })
+      expect(candidates.length).toBeLessThanOrEqual(budget)
+      expect(candidates.length).toBeGreaterThan(0)
+      expect(result.width).toBeGreaterThan(0)
+    }
   })
 })

@@ -24,8 +24,8 @@ export function placeNodes(g0: LGraph, opts: PlacementOptions, trace?: PlaceTrac
   const g = cloneGraph(g0)
   if (g.layers.length === 0) return g
   const x =
-    opts.strategy === 'networkSimplex'
-      ? networkSimplexPlace(g)
+    opts.strategy === 'networkSimplex' || opts.strategy === 'ns2'
+      ? networkSimplexPlace(g, opts.strategy === 'ns2')
       : brandesKoepf(g, opts.compactTies === true, trace)
   const min = Math.min(...x.values())
   for (const n of g.nodes) n.x = (x.get(n) as number) - min
@@ -69,10 +69,17 @@ const VARIANTS: Variant[] = [false, true].flatMap((free) =>
 
 function brandesKoepf(g: LGraph, compactTies: boolean, trace?: PlaceTrace): Map<LNode, number> {
   const layers = g.layers
+  // Everything below runs in index space — ix numbers the nodes in
+  // g.nodes order, block links are Int32Arrays — because the 8-variant
+  // loop walks every node several times per variant and Map lookups
+  // were a measurable share of loop time. Same algorithm, same orders.
+  const N = g.nodes.length
+  const ix = new Map<LNode, number>(g.nodes.map((n, i) => [n, i]))
   // neighbours per node, sorted by their position in the adjacent layer
-  const upper = new Map<LNode, Neighbour[]>()
-  const lower = new Map<LNode, Neighbour[]>()
-  for (const n of g.nodes) {
+  const upper: Neighbour[][] = new Array(N)
+  const lower: Neighbour[][] = new Array(N)
+  for (let i = 0; i < N; i++) {
+    const n = g.nodes[i]
     const ups: Neighbour[] = []
     const downs: Neighbour[] = []
     for (const p of n.ports) {
@@ -81,15 +88,24 @@ function brandesKoepf(g: LGraph, compactTies: boolean, trace?: PlaceTrace): Map<
     }
     ups.sort((a, b) => a.node.order - b.node.order)
     downs.sort((a, b) => a.node.order - b.node.order)
-    upper.set(n, ups)
-    lower.set(n, downs)
+    upper[i] = ups
+    lower[i] = downs
   }
-  const marked = markConflicts(layers, upper)
+  const marked = markConflicts(layers, upper, ix)
 
-  let best: { x: Map<LNode, number>; width: number; span: number } | null = null
+  let best: { x: Float64Array; width: number; span: number } | null = null
   for (const [k, v] of VARIANTS.entries()) {
-    const x = alignAndCompact(g, layers, v.up ? upper : lower, v, marked)
-    const width = extent(layers, x)
+    const x = alignAndCompact(g, ix, v.up ? upper : lower, v, marked)
+    let width = 0
+    {
+      let min = Number.POSITIVE_INFINITY
+      let max = Number.NEGATIVE_INFINITY
+      for (let i = 0; i < N; i++) {
+        min = Math.min(min, x[i])
+        max = Math.max(max, x[i] + g.nodes[i].w)
+      }
+      width = max - min
+    }
     // equal widths are broken by the rows' summed extents: a row stretched
     // across the whole width by blocks pinned apart loses to a packed one
     let span = 0
@@ -98,15 +114,17 @@ function brandesKoepf(g: LGraph, compactTies: boolean, trace?: PlaceTrace): Map<
       let lo = Number.POSITIVE_INFINITY
       let hi = Number.NEGATIVE_INFINITY
       for (const n of row) {
-        lo = Math.min(lo, x.get(n) as number)
-        hi = Math.max(hi, (x.get(n) as number) + n.w)
+        const xi = x[ix.get(n) as number]
+        lo = Math.min(lo, xi)
+        hi = Math.max(hi, xi + n.w)
       }
       span += hi - lo
     }
-    const valid = ordered(g, layers, x)
+    const valid = ordered(g, layers, x, ix)
     if (trace !== undefined) {
-      const min = Math.min(...x.values())
-      for (const n of g.nodes) n.x = (x.get(n) as number) - min
+      let min = Number.POSITIVE_INFINITY
+      for (let i = 0; i < N; i++) min = Math.min(min, x[i])
+      for (const n of g.nodes) n.x = x[ix.get(n) as number] - min
       trace(
         g,
         `${v.up ? 'upper' : 'lower'} medians${v.free ? ', free chains' : ''}, packed ${v.left ? 'left' : 'right'} · width ${width}${valid ? '' : ' · overlaps'}`,
@@ -117,7 +135,9 @@ function brandesKoepf(g: LGraph, compactTies: boolean, trace?: PlaceTrace): Map<
     const tie = compactTies && best !== null && width === best.width && span < best.span
     if (best === null || (valid && (width < best.width || tie))) best = { x, width, span }
   }
-  return best === null ? new Map() : best.x
+  const out = new Map<LNode, number>()
+  if (best !== null) for (let i = 0; i < N; i++) out.set(g.nodes[i], best.x[i])
+  return out
 }
 
 /**
@@ -125,11 +145,15 @@ function brandesKoepf(g: LGraph, compactTies: boolean, trace?: PlaceTrace): Map<
  * stay straight, so any ordinary edge crossing it is marked and never used
  * for alignment. The paper's Alg. 1 with 0-based indices.
  */
-function markConflicts(layers: LNode[][], upper: Map<LNode, Neighbour[]>): Set<LEdge> {
+function markConflicts(
+  layers: LNode[][],
+  upper: Neighbour[][],
+  ix: Map<LNode, number>,
+): Set<LEdge> {
   const marked = new Set<LEdge>()
   const inner = (v: LNode): Neighbour | undefined => {
     if (v.kind === 'node') return undefined
-    const u = (upper.get(v) as Neighbour[])[0]
+    const u = upper[ix.get(v) as number][0]
     return u !== undefined && u.node.kind !== 'node' ? u : undefined
   }
   for (let i = 0; i + 1 < layers.length; i++) {
@@ -144,7 +168,7 @@ function markConflicts(layers: LNode[][], upper: Map<LNode, Neighbour[]>): Set<L
         while (l <= l1) {
           const w = cur[l]
           if (inner(w) === undefined) {
-            for (const nb of upper.get(w) as Neighbour[]) {
+            for (const nb of upper[ix.get(w) as number]) {
               if (nb.node.order < k0 || nb.node.order > k1) marked.add(nb.edge)
             }
           }
@@ -162,33 +186,37 @@ const portOffset = (n: LNode, e: LEdge): number => (e.src.node === n ? e.src.pos
 
 function alignAndCompact(
   g: LGraph,
-  layers: LNode[][],
-  neighbours: Map<LNode, Neighbour[]>,
+  ix: Map<LNode, number>,
+  neighbours: Neighbour[][],
   v: Variant,
   marked: Set<LEdge>,
-): Map<LNode, number> {
-  const root = new Map<LNode, LNode>()
-  const align = new Map<LNode, LNode>()
-  const via = new Map<LNode, LEdge>() // the edge that aligned a node to its block predecessor
-  for (const n of g.nodes) {
-    root.set(n, n)
-    align.set(n, n)
+): Float64Array {
+  const N = g.nodes.length
+  const nodes = g.nodes
+  const layers = g.layers
+  const root = new Int32Array(N)
+  const align = new Int32Array(N)
+  const via: (LEdge | null)[] = new Array(N).fill(null) // edge aligning a node to its block predecessor
+  for (let i = 0; i < N; i++) {
+    root[i] = i
+    align[i] = i
   }
   // --- vertical alignment: walk layers in the variant's direction, align
   // each node with a median neighbour if that keeps blocks from crossing
   const rows = v.up ? layers : [...layers].reverse()
   for (const row of rows) {
     let r = v.left ? -1 : Number.POSITIVE_INFINITY
-    const nodes = v.left ? row : [...row].reverse()
-    for (const n of nodes) {
-      const nb = neighbours.get(n) as Neighbour[]
+    const list = v.left ? row : [...row].reverse()
+    for (const n of list) {
+      const i = ix.get(n) as number
+      const nb = neighbours[i]
       const d = nb.length
       if (d === 0) continue
       const lo = Math.floor((d + 1) / 2) - 1
       const hi = Math.ceil((d + 1) / 2) - 1
       const medians = v.left ? [lo, hi] : [hi, lo]
       for (const m of medians) {
-        if (align.get(n) !== n) break
+        if (align[i] !== i) break
         const { node: u, edge } = nb[m]
         const ok = v.left ? r < u.order : r > u.order
         if (marked.has(edge) || !ok) continue
@@ -202,132 +230,124 @@ function alignAndCompact(
           (n.kind === 'node') !== (u.kind === 'node')
         )
           continue
-        align.set(u, n)
-        root.set(n, root.get(u) as LNode)
-        align.set(n, root.get(n) as LNode)
-        via.set(n, edge)
+        const j = ix.get(u) as number
+        align[j] = i
+        root[i] = root[j]
+        align[i] = root[i]
+        via[i] = edge
         r = u.order
       }
     }
   }
   // --- inside-block shift: every block is straight at its port cells; the
   // block root's x is the block's left edge
-  const inner = new Map<LNode, number>()
-  for (const n of g.nodes) {
-    if (root.get(n) !== n) continue
-    inner.set(n, 0)
+  const inner = new Float64Array(N)
+  for (let i = 0; i < N; i++) {
+    if (root[i] !== i) continue
+    inner[i] = 0
     let min = 0
-    for (
-      let cur = n, next = align.get(n) as LNode;
-      next !== n;
-      cur = next, next = align.get(next) as LNode
-    ) {
-      const e = via.get(next) as LEdge
-      const shift = (inner.get(cur) as number) + portOffset(cur, e) - portOffset(next, e)
-      inner.set(next, shift)
+    for (let cur = i, next = align[i]; next !== i; cur = next, next = align[next]) {
+      const e = via[next] as LEdge
+      const shift = inner[cur] + portOffset(nodes[cur], e) - portOffset(nodes[next], e)
+      inner[next] = shift
       min = Math.min(min, shift)
     }
-    for (let cur = n; ; ) {
-      inner.set(cur, (inner.get(cur) as number) - min)
-      cur = align.get(cur) as LNode
-      if (cur === n) break
+    for (let cur = i; ; ) {
+      inner[cur] -= min
+      cur = align[cur]
+      if (cur === i) break
     }
   }
   // --- horizontal compaction with class shifts (ELK's BKCompactor)
-  const sink = new Map<LNode, LNode>()
-  const x = new Map<LNode, number>()
-  for (const n of g.nodes) sink.set(n, n)
-  const classEdges = new Map<LNode, { to: LNode; slack: number }[]>()
-  const placeBlock = (b: LNode): void => {
-    if (x.has(b)) return
-    x.set(b, 0)
+  const sink = new Int32Array(N)
+  const placed = new Uint8Array(N)
+  const x = new Float64Array(N)
+  for (let i = 0; i < N; i++) sink[i] = i
+  const classEdges: { to: number; slack: number }[][] = new Array(N)
+  const placeBlock = (b: number): void => {
+    if (placed[b] === 1) return
+    placed[b] = 1
+    x[b] = 0
     let initial = true
     for (let cur = b; ; ) {
-      const row = layers[cur.layer]
-      const idx = cur.order
+      const node = nodes[cur]
+      const row = layers[node.layer]
+      const idx = node.order
       const hasNb = v.left ? idx > 0 : idx < row.length - 1
       if (hasNb) {
         const nb = row[v.left ? idx - 1 : idx + 1]
-        const nbRoot = root.get(nb) as LNode
+        const nbi = ix.get(nb) as number
+        const nbRoot = root[nbi]
         placeBlock(nbRoot)
-        if (sink.get(b) === b) sink.set(b, sink.get(nbRoot) as LNode)
-        const s = gap(g.spacing, nb, cur)
-        const nbLeft = (x.get(nbRoot) as number) + (inner.get(nb) as number)
-        const curInner = inner.get(cur) as number
-        if (sink.get(b) === sink.get(nbRoot)) {
-          const pos = v.left ? nbLeft + nb.w + s - curInner : nbLeft - s - cur.w - curInner
-          const old = x.get(b) as number
-          x.set(b, initial ? pos : v.left ? Math.max(old, pos) : Math.min(old, pos))
+        if (sink[b] === b) sink[b] = sink[nbRoot]
+        const s = gap(g.spacing, nb, node)
+        const nbLeft = x[nbRoot] + inner[nbi]
+        const curInner = inner[cur]
+        if (sink[b] === sink[nbRoot]) {
+          const pos = v.left ? nbLeft + nb.w + s - curInner : nbLeft - s - node.w - curInner
+          const old = x[b]
+          x[b] = initial ? pos : v.left ? Math.max(old, pos) : Math.min(old, pos)
           initial = false
         } else {
-          const curLeft = (x.get(b) as number) + curInner
-          const slack = v.left ? curLeft - (nbLeft + nb.w) - s : curLeft + cur.w + s - nbLeft
-          const from = sink.get(b) as LNode
-          const list = classEdges.get(from)
-          const entry = { to: sink.get(nbRoot) as LNode, slack }
-          if (list === undefined) classEdges.set(from, [entry])
-          else list.push(entry)
+          const curLeft = x[b] + curInner
+          const slack = v.left ? curLeft - (nbLeft + nb.w) - s : curLeft + node.w + s - nbLeft
+          const from = sink[b]
+          const entry = { to: sink[nbRoot], slack }
+          if (classEdges[from] === undefined) classEdges[from] = [entry]
+          else classEdges[from].push(entry)
         }
       }
-      cur = align.get(cur) as LNode
+      cur = align[cur]
       if (cur === b) break
     }
   }
   for (const row of rows)
-    for (const n of v.left ? row : [...row].reverse()) if (root.get(n) === n) placeBlock(n)
+    for (const n of v.left ? row : [...row].reverse()) {
+      const i = ix.get(n) as number
+      if (root[i] === i) placeBlock(i)
+    }
   // class shifts: propagate from classes nothing depends on, taking the
   // tightest slack (min when packing left, max when packing right)
-  const shift = new Map<LNode, number>()
-  const indeg = new Map<LNode, number>()
-  const classes = new Set<LNode>()
-  for (const n of g.nodes) if (sink.get(n) === n && root.get(n) === n) classes.add(n)
-  for (const c of classes) indeg.set(c, 0)
-  for (const list of classEdges.values())
-    for (const { to } of list) indeg.set(to, (indeg.get(to) ?? 0) + 1)
-  const queue = [...classes].filter((c) => indeg.get(c) === 0)
-  for (const c of queue) shift.set(c, 0)
-  for (let q = 0; q < queue.length; q++) {
-    const c = queue[q]
-    for (const { to, slack } of classEdges.get(c) ?? []) {
-      const cand = (shift.get(c) as number) + slack
-      const old = shift.get(to)
-      shift.set(to, old === undefined ? cand : v.left ? Math.min(old, cand) : Math.max(old, cand))
-      const left = (indeg.get(to) as number) - 1
-      indeg.set(to, left)
-      if (left === 0) queue.push(to)
+  const shift = new Float64Array(N)
+  const hasShift = new Uint8Array(N)
+  const indeg = new Int32Array(N)
+  const queue: number[] = []
+  for (const list of classEdges) if (list !== undefined) for (const { to } of list) indeg[to]++
+  for (let i = 0; i < N; i++) {
+    if (sink[i] === i && root[i] === i && indeg[i] === 0) {
+      queue.push(i)
+      hasShift[i] = 1
     }
   }
-  const out = new Map<LNode, number>()
-  for (const n of g.nodes) {
-    const r = root.get(n) as LNode
-    out.set(
-      n,
-      (x.get(r) as number) + (inner.get(n) as number) + (shift.get(sink.get(r) as LNode) ?? 0),
-    )
+  for (let q = 0; q < queue.length; q++) {
+    const c = queue[q]
+    const list = classEdges[c]
+    if (list === undefined) continue
+    for (const { to, slack } of list) {
+      const cand = shift[c] + slack
+      if (hasShift[to] === 0) {
+        shift[to] = cand
+        hasShift[to] = 1
+      } else shift[to] = v.left ? Math.min(shift[to], cand) : Math.max(shift[to], cand)
+      if (--indeg[to] === 0) queue.push(to)
+    }
+  }
+  const out = new Float64Array(N)
+  for (let i = 0; i < N; i++) {
+    const r = root[i]
+    const sk = sink[r]
+    out[i] = x[r] + inner[i] + (hasShift[sk] === 1 ? shift[sk] : 0)
   }
   return out
 }
 
-function extent(layers: LNode[][], x: Map<LNode, number>): number {
-  let min = Number.POSITIVE_INFINITY
-  let max = Number.NEGATIVE_INFINITY
-  for (const row of layers) {
-    for (const n of row) {
-      const l = x.get(n) as number
-      min = Math.min(min, l)
-      max = Math.max(max, l + n.w)
-    }
-  }
-  return max - min
-}
-
 /** Order kept and gaps respected in every layer. */
-function ordered(g: LGraph, layers: LNode[][], x: Map<LNode, number>): boolean {
+function ordered(g: LGraph, layers: LNode[][], x: Float64Array, ix: Map<LNode, number>): boolean {
   for (const row of layers) {
     for (let i = 1; i < row.length; i++) {
       const a = row[i - 1]
       const b = row[i]
-      if ((x.get(b) as number) < (x.get(a) as number) + a.w + gap(g.spacing, a, b)) return false
+      if (x[ix.get(b) as number] < x[ix.get(a) as number] + a.w + gap(g.spacing, a, b)) return false
     }
   }
   return true
@@ -341,7 +361,7 @@ function ordered(g: LGraph, layers: LNode[][], x: Map<LNode, number>): boolean {
  * length equals the port-column difference; consecutive nodes in a layer
  * are chained with their width plus gap as minimum length.
  */
-function networkSimplexPlace(g: LGraph): Map<LNode, number> {
+function networkSimplexPlace(g: LGraph, flat = false): Map<LNode, number> {
   const index = new Map<LNode, number>(g.nodes.map((n, i) => [n, i]))
   const edges: NsEdge[] = []
   let count = g.nodes.length
@@ -350,12 +370,15 @@ function networkSimplexPlace(g: LGraph): Map<LNode, number> {
     const s = index.get(e.src.node) as number
     const t = index.get(e.dst.node) as number
     const d = count++
+    const hi = flat ? 4 : 32
+    const mid = flat ? 2 : 8
+    const lo = flat ? 1 : 4
     const w =
       e.src.node.kind !== 'node' && e.dst.node.kind !== 'node'
-        ? 32
+        ? hi
         : e.src.node.kind !== 'node' || e.dst.node.kind !== 'node'
-          ? 8
-          : 4
+          ? mid
+          : lo
     const ps = e.src.pos
     const pt = e.dst.pos
     edges.push({ s: d, t: s, w, delta: Math.max(0, pt - ps) })

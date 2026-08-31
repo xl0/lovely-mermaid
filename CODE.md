@@ -101,8 +101,9 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
 `src/engine/` is a generic layered engine: synchronous, dependency-free,
 integer geometry in whatever unit the caller's sizes use. `layout(input,
 opts?, trace?)` runs the phases in order, each a pure function `graph →
-graph` that clones its input (`cloneGraph` = `structuredClone`, which keeps
-the ports ↔ nodes ↔ edges references intact) and works on the clone — so
+graph` that clones its input (`cloneGraph`, hand-rolled — ~4× faster
+than `structuredClone`, which was the engine's single biggest cost — the
+ports ↔ nodes ↔ edges references stay intact) and works on the clone — so
 the candidate loop and the lab's edit-and-continue can branch from any
 state, and the tests deep-freeze inputs to enforce it — on one working
 graph (`graph.ts`: every
@@ -145,22 +146,37 @@ feasible row and the layer dies (total edge length can only drop); each
 target stays within the cap or the currently widest row estimate,
 whichever is larger, so real slack fills but nothing widens. Emptied
 layer values are dropped where every spanning edge has slack; rim rows
-neither move nor receive. The loop's cap search tightens until a
-candidate fits, then bisects back up toward the loosest fitting cap
-(a too-tight cap trades far more height than the target asks). Estimates
+neither move nor receive. The loop's cap search tightens by the
+observed overshoot but never slower than a geometric 0.7× descent (the
+cap↔width curve is non-monotonic and a first stall often hides a
+deeper minimum — arch-system@134 fits at cap48 while cap95 renders
+wider than cap134), then bisects back up toward the loosest fitting
+cap (a too-tight cap trades far more height than the target asks).
+Estimates
 stop there; `squeeze` (an engine option, set from `fit.width` by the
 loop) is *geometry feedback*: after a full pass every root band's
-occupancy is measured from the actual nodes and routes as merged
-x-intervals (vertical runs count in every band they cross), and one
-row of real nodes per iteration evacuates into gaps that fit them;
-the layers are forced back onto the kept pre-split graph
+width demand is measured from the actual picture — its nodes plus a
+column per trunk that fully crosses it — and one row of real nodes
+per iteration evacuates into bands whose demand leaves room under the
+target; the layers are forced back onto the kept pre-split graph
 (`applyLayers`), the later phases re-run, and the move is kept only
 when the re-measured width and height do not regress — a rejected
-row is remembered and the next one tried, up to twelve iterations.
-One row at a time matters: each accepted move's real cost (new trunk
-columns from longer edges) is measured before the next decision. It
+row is remembered and the next one tried, `squeezeBudget` iterations
+at most. Demand, not occupancy intervals, judges room: routed columns
+spread across the free width fragment every gap, but placement
+re-routes them the moment a node arrives, so position-specific gaps
+under-admit. One row at a time matters: each accepted move's real
+cost (new trunk columns from longer edges) is measured before the
+next decision. When no whole row can move, one tall node may move
+beside another tall band — a band is as tall as its tallest node, so
+the source collapses to its shorter rest (net row gain decides). For
+an unreachable target the loop's finalists set `squeezeLoose`:
+admission follows the width already paid instead of the target, so a
+too-wide diagram still packs (the guard never lets width grow). It
 fills exactly the holes no layering-time estimate can see
-(session-er@100: 89×242 → 93×161).
+(session-er@100: 89×242 → 100×161; arch-state@120 fits at 118×498
+where it missed at 157 before; arch-state@100 packs sibling frames
+side by side).
 After cycle breaking has fixed each edge's side, a node too narrow for
 its busiest side is widened to give its ports the same pitch the
 channels give parallel edges — a cell per edge plus `edgeEdge` between,
@@ -211,7 +227,25 @@ chain moves) — a staircase of one-column bends collapses to straight
 runs; port dummies join in as one-cell chains anchored on their single
 inner endpoint, so a frame's ports spread out over what they connect to
 instead of bunching at the border's left (their pinned order bounds the
-slide). Then ELK's orthogonal channel router in cells (ch. 5): per
+slide). Then the ports meet the wires halfway (`tunePorts`): every
+free N/S port slides to the median column of its partners — order
+kept, channel pitch between ports, corners excluded, fixed ports and
+self-loop ends untouched — and a second relaxation lets the chains
+finish the job; an edge whose far end lines up gets a straight drop
+instead of a double bend at the border. Straightness never pays for
+width: `compactRight` then pulls
+the nodes that define the right edge back left within their row slack,
+one extent tier at a time — a frame stranded right of a fanned-out
+trunk bundle slides home, everything else keeps its straight column.
+The tier moves as one and only when the global extent actually
+shrinks: a partial slide (some definers stuck) would break port
+alignment for nothing — that bug showed up as one-column jogs
+dithering down otherwise straight chains. Slack is *transitive*: a
+definer blocked by a neighbour that itself has room pulls the whole
+prefix left, each pushed only as far as needed (`at` rims hold their
+ground). That one change let several fit targets fit for the first
+time — placement's straightness spread was quietly costing 30-80
+columns on trunk-heavy diagrams. Then ELK's orthogonal channel router in cells (ch. 5): per
 channel, a *trunk* per source cell (a fan-out bus; edges into one cell
 merge in its column instead — fusing by target too would join unrelated
 sources), stub → trunk row → stub; trunks with overlapping extents get a
@@ -283,18 +317,32 @@ candidate-loop knob), `arch-state` 239×318 (old 378×432),
 `arch-classes` 316×104 (old 400×120). Not yet: ports avoiding the title
 cells.
 
+`layoutFast(input, fit?, trace?)` is the streaming mode: one
+deterministic greedy+bk pass staggered toward `fit.width` (best-effort —
+the cap is an estimate and may be exceeded), 1–20 ms on the corpus.
+The bridge exposes it as `traceEngineFast`; the examples page has a
+`fast` checkbox. Re-run it per streamed update, then run the loop once
+the source settles.
+
 `layoutBest(input, opts?, fit?, trace?)` is the candidate loop: it runs
 `layout` under a few option combinations and keeps the best. Knobs set
 explicitly in `opts` are respected; the free dimensions are searched —
-cycle breaking (greedy/dfs) × placement (bk/networkSimplex) — and when
+cycle breaking (greedy/dfs/greedy2) × placement (bk/networkSimplex/ns2),
+pruned to the 7 cells that ever won on the corpus — and when
 `fit.width` is given and nothing fits a down-flow layout, cap passes
 follow (`layering.maxWidth` = the target, then tightened by the observed
 overshoot, then bisected up toward the loosest fitting cap), all inside
-`fit.budget` (default 12) layouts. Only the two most promising uncapped
+`fit.budget` (default 16) layouts. Only the two most promising uncapped
 probes advance to the capped phase: no combo is globally dominated on
 the corpus (each of the four wins somewhere), but a deep ladder on the
 right combos beats a broad shallow sweep — measured, it flipped a miss
-into a fit while cutting ~25% of the time.
+into a fit while cutting ~25% of the time. Squeeze is budgeted the same
+way: every targeted run probes with 2 `squeezeBudget` iterations —
+enough for the cap ladder to rank post-squeeze geometry — and the two
+best-ranked candidates whose probe *kept* an iteration (`result.
+squeezed`; a probe that kept nothing will not turn around with more
+budget) re-run with the full 24 in reserved budget slots, labelled
+`+sq`.
 Ranking is lexicographic, deterministic, first of equals: with a target —
 fits, then height, then width; without — width, then height. The winner
 re-runs with `trace` so the lab sees its phases; the returned
@@ -302,7 +350,16 @@ re-runs with `trace` so the lab sees its phases; the returned
 port positions couple levels, so level-local scores lie. Corpus: with no
 target the loop alone beats the defaults (arch-system 258→227); targets
 are best-effort (a target under the structural floor returns the least
-bad). ~0.5 s worst case on the corpus.
+bad). ~0.4 s worst case on the corpus (arch-system; its per-layout
+place cost is the floor). Both phases' hot paths run in index space:
+BK's 8-variant loop and the network simplex solver (shared by layering
+and NS placement) had Map/Set rebuilds dominating their time — typed
+arrays with generation stamps, same algorithms, same iteration orders,
+bit-identical output. greedy2 (ties from the tail) and ns2 (flat 4/2/1
+weights, chains bend rather than hold columns) exist because diversity
+is cheap and each sole-wins somewhere: state-regions 58×55 → 45×59,
+arch-classes 314×96 → 314×85, arch-state uncapped 230×330 → 217×423
+(narrower but taller — the no-target metric is width-first).
 
 The bridge (`layout-engine.ts`) measures nodes from wrapped labels /
 compartments (no even-width forcing), turns `cardFrom`/`cardTo` into tail /
@@ -482,7 +539,9 @@ as possible, report what was lost in `warnings`.
   delimiters are handled structurally first: a bad `class X {` / entity `{`
   declaration swallows its whole body (`'skip'` sentinel), since reading the
   members as top-level statements would misparse everything inside.
-- Size caps truncate: `MAX_NODES`/`MAX_EDGES` (and the flowchart subgraph
+- Size caps truncate: `MAX_NODES` (256 — raised from 128 when the full
+  149-node arch-state hit it; layoutFast stays ~17 ms at that size) /
+  `MAX_EDGES` (and the flowchart subgraph
   caps) stop the parse, render the prefix, and warn
   `diagram truncated: <cap> reached`. Rationale: streaming — a growing diagram
   can never un-cap, so the old refusal flipped it to the source box forever;

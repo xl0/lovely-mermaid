@@ -10,14 +10,14 @@
 	type Spec = readonly string[] | 'number' | 'boolean';
 	type Bag = Record<string, string | number | boolean | undefined>;
 	const schema: Record<string, Record<string, Spec>> = {
-		cycles: { strategy: ['greedy', 'dfs'] },
+		cycles: { strategy: ['greedy', 'dfs', 'greedy2'] },
 		layering: {
 			strategy: ['networkSimplex', 'longestPath'],
 			maxWidth: 'number',
 			packWidth: 'number'
 		},
 		ordering: { strategy: ['sweep', 'none'], thoroughness: 'number', greedySwitch: 'boolean' },
-		placement: { strategy: ['bk', 'networkSimplex'] }
+		placement: { strategy: ['bk', 'networkSimplex', 'ns2'] }
 	};
 	const phases = Object.keys(schema);
 

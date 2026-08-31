@@ -11,6 +11,7 @@
 		type LayoutOptions,
 		type Snapshot,
 		traceEngine,
+		traceEngineFast,
 		traceEngineFit
 	} from 'lovely-mermaid-engine';
 	import AnsiCanvas from '$lib/AnsiCanvas.svelte';
@@ -25,6 +26,7 @@
 		elkOn = true,
 		elkExtra = {},
 		engineOpts = {},
+		fast = false,
 		fitWidth = null,
 		showLabels = true,
 		dark = true,
@@ -35,6 +37,8 @@
 		elkOn?: boolean;
 		elkExtra?: Record<string, string>;
 		engineOpts?: LayoutOptions;
+		/** streaming mode: one cheap deterministic pass instead of the loop */
+		fast?: boolean;
 		/** target width in cells; the candidate loop fits to it */
 		fitWidth?: number | null;
 		/** edge label chips in the engine view */
@@ -55,7 +59,11 @@
 			const t0 = performance.now();
 			let snapshots: Snapshot[];
 			let loop: { chosen: string; candidates: Candidate[] } | null = null;
-			if (fitWidth !== null && fitWidth > 0) {
+			if (fast) {
+				const r = traceEngineFast(src, fitWidth !== null && fitWidth > 0 ? { width: fitWidth } : {});
+				if (r === null) return { pic: null, supported: false, err: '', loop: null, ms: 0 };
+				snapshots = r.snapshots;
+			} else if (fitWidth !== null && fitWidth > 0) {
 				const r = traceEngineFit(src, { width: fitWidth }, opts);
 				if (r === null) return { pic: null, supported: false, err: '', loop: null, ms: 0 };
 				snapshots = r.snapshots;

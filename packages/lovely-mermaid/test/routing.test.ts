@@ -116,6 +116,40 @@ describe('routing', () => {
     wellFormed(g)
   })
 
+  test('stacked self-loops nest without touching, clear of the next band', () => {
+    const g = routed(['X>A', 'A>A', 'A>A', 'A>B'])
+    const B = g.nodes.find((n) => n.id === 'B') as LGraph['nodes'][number]
+    const loops = g.edges.filter((e) => e.src.node === e.dst.node)
+    expect(loops.length).toBe(2)
+    const [r0, r1] = loops.map((e) => e.route as Pt[])
+    // wraps nest: distinct rows and columns, the outer strictly around
+    expect(new Set([r0[1][1], r1[1][1]]).size).toBe(2) // below rows
+    expect(new Set([r0[2][0], r1[2][0]]).size).toBe(2) // east columns
+    expect(new Set([r0[3][1], r1[3][1]]).size).toBe(2) // above rows
+    // no cell shared between the two loop routes
+    const cells = (r: Pt[]): Set<string> => {
+      const out = new Set<string>()
+      for (let i = 1; i < r.length; i++) {
+        const [x0, y0] = r[i - 1]
+        const [x1, y1] = r[i]
+        for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++)
+          for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) out.add(`${x},${y}`)
+      }
+      return out
+    }
+    const shared = [...cells(r0)].filter((c) => cells(r1).has(c))
+    expect(shared).toEqual([])
+    // loop rows stay clear of the neighbouring bands' boxes
+    for (const r of [r0, r1])
+      for (const [x, y] of r) {
+        const inBox = (n: LGraph['nodes'][number]): boolean =>
+          n.id !== 'A' && x >= n.x && x < n.x + n.w && y >= n.y && y < n.y + n.h
+        expect(g.nodes.some((n) => n.kind === 'node' && inBox(n))).toBe(false)
+      }
+    expect(B.y).toBeGreaterThan(Math.max(r0[1][1], r1[1][1])) // below rows above B
+    wellFormed(g)
+  })
+
   test('relaxation: an unobstructed chain drops dead straight from its port', () => {
     const g = routed(['A>Z:3'])
     const chain = g.nodes.filter((n) => n.kind === 'dummy')

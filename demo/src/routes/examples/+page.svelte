@@ -22,6 +22,7 @@
 	let engineOpts = $state<LayoutOptions>({});
 	let engineMenuOpen = $state(false);
 	let fitWidth = $state<number | null>(null);
+	let fast = $state(false);
 
 	// The settings travel in the URL hash so a reload keeps them.
 	let loaded = $state(false);
@@ -37,6 +38,7 @@
 						elkExtra?: Record<string, string>;
 						engineOpts?: LayoutOptions;
 						fitWidth?: number | null;
+						fast?: boolean;
 						showLabels?: boolean;
 						dark?: boolean;
 					};
@@ -45,6 +47,7 @@
 					if (v.elkExtra !== undefined) elkExtra = v.elkExtra;
 					if (v.engineOpts !== undefined) engineOpts = v.engineOpts;
 					if (v.fitWidth !== undefined) fitWidth = v.fitWidth;
+					if (v.fast !== undefined) fast = v.fast;
 					if (v.showLabels !== undefined) showLabels = v.showLabels;
 					if (v.dark !== undefined) dark = v.dark;
 				})
@@ -60,6 +63,7 @@
 			elkExtra,
 			engineOpts,
 			fitWidth,
+			fast,
 			showLabels,
 			dark
 		});
@@ -164,6 +168,9 @@
 		>
 		{#if renderer === 'engine'}
 			<label class="dim">labels <input type="checkbox" bind:checked={showLabels} /></label>
+			<label class="dim" title="streaming mode: one cheap pass, may exceed the fit width"
+				>fast <input type="checkbox" bind:checked={fast} /></label
+			>
 			<label class="dim fit">
 				fit <input
 					type="number"
@@ -249,6 +256,7 @@
 						{elkExtra}
 						{engineOpts}
 						{fitWidth}
+						{fast}
 						{showLabels}
 						{dark}
 						{theme}

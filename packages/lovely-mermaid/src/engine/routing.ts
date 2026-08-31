@@ -37,6 +37,9 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
   const L = g.layers.length
   if (L === 0) return g
   relaxChains(g)
+  tunePorts(g)
+  relaxChains(g)
+  compactRight(g)
   const gapRows = Math.max(1, g.spacing.channelGap)
   const bandH = g.layers.map((row) => Math.max(1, ...row.map((n) => n.h)))
   const col = (p: LPort): number => p.node.x + p.pos
@@ -53,15 +56,20 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
   // Band tops from the track counts; nodes sit at the top of their band.
   // A first-layer self-loop returns through the rows above its box.
   const top: number[] = []
+  // stacked self-loops: the first loop borrows the adjacent gap row as
+  // before, every further one gets a real row of its own on both sides
+  const extraLoops = (l: number): number =>
+    Math.max(0, ...(g.layers[l] ?? []).map((n) => (n.loops ?? 0) - 1))
   let y = Math.max(0, ...(g.layers[0] ?? []).map((n) => n.loops ?? 0))
   for (let l = 0; l < L; l++) {
     top.push(y)
     for (const n of g.layers[l]) n.y = y
-    y += bandH[l]
+    y += bandH[l] + extraLoops(l)
     if (l + 1 < L) {
       const ch = channels[l]
       ch.first = y + gapRows
       y += ch.tracks === 0 ? 1 : ch.tracks + 2 * gapRows
+      y += extraLoops(l + 1)
     }
   }
   // Pass 2: routes. A dummy or port is one cell at the top of its band, so
@@ -85,35 +93,32 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
     }
   }
   // Self-loops: a miniature cycle — out of the bottom border, around the
-  // east side on the columns `gap` reserved, back in through the top. The
-  // k-th loop of a node wraps two columns further out and one row wider;
-  // rows beyond the adjacent gap rows may collide with tracks, so stacked
-  // loops carry a warning.
+  // east side on the columns `gap` reserved, back in through the top.
+  // The k-th loop wraps two columns further out and one row wider; the
+  // band tops reserved a row per extra loop. Wraps nest east→west: the
+  // eastmost exit wraps tightest, outer loops leave and re-enter further
+  // west, so an outer drop never crosses an inner run.
   for (const n of g.nodes) {
-    let k = 0
-    for (const p of n.ports) {
-      for (const e of p.out) {
-        if (e.dst.node !== n) continue
-        const below = n.y + n.h - 1 + (k + 1)
-        const above = n.y - (k + 1)
-        if (above < 0) {
-          g.warnings.push(`edge "${e.id}": no room above "${n.id}" for another self-loop`)
-          k++
-          continue
-        }
-        if (k > 0) g.warnings.push(`edge "${e.id}": stacked self-loops may cross channel tracks`)
-        const out = n.x + n.w - 1 + 2 * (k + 1)
-        e.route = [
-          [n.x + e.src.pos, n.y + n.h - 1],
-          [n.x + e.src.pos, below],
-          [out, below],
-          [out, above],
-          [n.x + e.dst.pos, above],
-          [n.x + e.dst.pos, n.y],
-        ]
-        k++
+    const loops: LEdge[] = []
+    for (const p of n.ports) for (const e of p.out) if (e.dst.node === n) loops.push(e)
+    loops.sort((a, b) => b.src.pos - a.src.pos)
+    loops.forEach((e, k) => {
+      const below = n.y + n.h - 1 + (k + 1)
+      const above = n.y - (k + 1)
+      if (above < 0) {
+        g.warnings.push(`edge "${e.id}": no room above "${n.id}" for another self-loop`)
+        return
       }
-    }
+      const out = n.x + n.w - 1 + 2 * (k + 1)
+      e.route = [
+        [n.x + e.src.pos, n.y + n.h - 1],
+        [n.x + e.src.pos, below],
+        [out, below],
+        [out, above],
+        [n.x + e.dst.pos, above],
+        [n.x + e.dst.pos, n.y],
+      ]
+    })
   }
   return g
 }
@@ -126,6 +131,118 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
  * a bend. Chains block each other, so the sweep repeats until nothing
  * moves (a few passes; capped).
  */
+/**
+ * Ports meet the wires halfway: once the chains have relaxed, every
+ * free N/S port slides toward the median column of its partners, so an
+ * edge whose far end already lines up gets a straight drop instead of
+ * a double bend at the border. Order is kept (crossing minimization
+ * decided it), ports keep the channel pitch between them and stay off
+ * the corners, and fixed ports (frames) and self-loop ends do not move
+ * — the loop ends stay last so their east wrap stays intact.
+ */
+function tunePorts(g: LGraph): void {
+  const pitch = 1 + g.spacing.edgeEdge
+  for (const n of g.nodes) {
+    if (n.kind !== 'node' || n.w <= 2) continue
+    for (const side of ['N', 'S'] as const) {
+      const all = n.ports.filter((p) => p.side === side)
+      if (all.length === 0 || all.some((p) => p.fixed === true)) continue
+      all.sort((a, b) => a.pos - b.pos)
+      const isLoop = (p: LPort): boolean =>
+        [...p.in, ...p.out].some((e) => e.src.node === e.dst.node)
+      const ps = all.filter((p) => !isLoop(p))
+      if (ps.length === 0) continue
+      const loops = all.filter(isLoop)
+      const lo = 1
+      const hi = loops.length > 0 ? Math.min(...loops.map((p) => p.pos)) - pitch : n.w - 2
+      if (hi < lo) continue
+      const want = ps.map((p) => {
+        const anchors: number[] = []
+        for (const e of [...p.in, ...p.out]) {
+          const q = e.src === p ? e.dst : e.src
+          if (q.node === n) continue
+          anchors.push(q.node.x + q.pos - n.x)
+        }
+        if (anchors.length === 0) return p.pos
+        anchors.sort((x, y) => x - y)
+        return anchors[(anchors.length - 1) >> 1]
+      })
+      const xs: number[] = []
+      for (let i = 0; i < ps.length; i++)
+        xs.push(Math.max(i === 0 ? lo : xs[i - 1] + pitch, Math.min(hi, Math.max(lo, want[i]))))
+      for (let i = ps.length - 1; i >= 0; i--) {
+        const cap = i === ps.length - 1 ? hi : xs[i + 1] - pitch
+        if (xs[i] > cap) xs[i] = Math.max(lo, cap)
+      }
+      ps.forEach((p, i) => {
+        p.pos = xs[i]
+      })
+    }
+  }
+}
+
+/**
+ * Straightness never pays for width: after relaxation, the nodes that
+ * define the right edge are pulled back left within their row slack —
+ * one extent tier at a time, so interior nodes keep their straight
+ * columns and a bend is bought only where it actually narrows the
+ * picture (a frame stranded right of a fanned-out trunk bundle is the
+ * classic case).
+ */
+function compactRight(g: LGraph): void {
+  const span = (n: LNode): number => Math.max(1, n.w) + 2 * (n.loops ?? 0)
+  const right = (n: LNode): number => n.x + span(n)
+  // packed-left minimum for row[i]: every free neighbour to its left
+  // compressed to its own minimum (`at` rim dummies hold their ground)
+  const transLo = (row: LNode[], i: number): number => {
+    let lo = 0
+    for (let j = 0; j < i; j++) {
+      const d = row[j]
+      const x = d.at !== undefined ? d.x : Math.max(lo, 0)
+      lo = Math.max(lo, x + span(d)) + gap(g.spacing, d, row[j + 1])
+    }
+    return lo
+  }
+  for (let round = 0; round < 30; round++) {
+    let X = 0
+    for (const n of g.nodes) X = Math.max(X, right(n))
+    let second = 0
+    const movers: { row: LNode[]; i: number }[] = []
+    let stuck = false
+    for (const row of g.layers) {
+      for (let i = 0; i < row.length; i++) {
+        const d = row[i]
+        const r = right(d)
+        if (r < X) {
+          second = Math.max(second, r)
+          continue
+        }
+        if (d.at !== undefined) {
+          stuck = true
+          continue
+        }
+        movers.push({ row, i })
+      }
+    }
+    if (stuck || movers.length === 0) break
+    // the extent the whole tier can actually reach — no global gain, no
+    // move: a partial slide would break port alignment for nothing, and
+    // the tier moves together so aligned chains inside it stay straight
+    let reach = second
+    for (const { row, i } of movers) reach = Math.max(reach, transLo(row, i) + span(row[i]))
+    if (reach >= X) break
+    for (const { row, i } of movers) {
+      row[i].x = reach - span(row[i])
+      // push the left neighbours out of the way, only as far as needed
+      for (let j = i - 1; j >= 0; j--) {
+        const d = row[j]
+        const need = row[j + 1].x - gap(g.spacing, d, row[j + 1]) - span(d)
+        if (d.x > need && d.at === undefined) d.x = need
+      }
+    }
+  }
+}
+
 function relaxChains(g: LGraph): void {
   const W = Math.max(...g.nodes.map((n) => n.x + Math.max(1, n.w)))
   const chains = new Map<string, LNode[]>()

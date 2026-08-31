@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { replaceState } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { packHash, unpackHash } from '$lib/hash';
@@ -21,6 +22,7 @@
 		type LayoutOptions,
 		layout,
 		layoutBest,
+		layoutFast,
 		prepare
 	} from 'lovely-mermaid-engine';
 
@@ -66,6 +68,10 @@
 		return groups;
 	}
 	let groups = $state<Group[]>([]);
+	// declared before the init-time generate() call below — generate()
+	// writes it, and a later `let` is a TDZ ReferenceError that the
+	// router swallows into a silently blank page
+	let fitted = $state(false);
 	let phase = $state(-1);
 	let step = $state(0);
 	let genErr = $state('');
@@ -76,36 +82,58 @@
 				const o = JSON.parse(s) as {
 					src?: string;
 					opts?: LayoutOptions;
-					text: string;
+					text?: string;
 					view: Partial<View>;
 					fit?: number | null;
 				};
 				src = o.src ?? DEFAULT_SRC;
 				opts = typeof o.opts === 'object' && o.opts !== null ? o.opts : {};
-				text = o.text;
+				if (o.text !== undefined) text = o.text;
 				view = { ...DEFAULT_VIEW, ...o.view };
 				fitW = o.fit ?? null;
+				// re-run the pipeline so a reload shows the live layout, not
+				// the persisted snapshot; a JSON-only session (no source ever
+				// generated) keeps its hand-authored text instead
+				if (o.src !== undefined) generate();
 			})
+			.catch((e) => console.warn('lab: could not restore the URL state', e))
 			.finally(() => (loaded = true));
 	} else {
 		generate();
 	}
 	let writeSeq = 0;
 	$effect(() => {
-		const s = JSON.stringify({ src, opts, text, view, fit: fitW });
+		// the snapshot JSON is derived (generate() rebuilds it on restore)
+		// and huge for big diagrams — persist it only for a JSON-only
+		// session where it IS the document; hand edits made on top of a
+		// generated pipeline are ephemeral by design (any option change
+		// rewrites them)
+		const s = JSON.stringify({
+			src,
+			opts,
+			...(input === null ? { text } : {}),
+			view,
+			fit: fitW
+		});
 		if (!loaded) return;
 		const seq = ++writeSeq;
 		const t = setTimeout(() => {
 			packHash(s).then((h) => {
-				if (seq === writeSeq) history.replaceState(null, '', `${base}/lab/${h}`);
+				// the router's own replaceState — a raw history.replaceState
+				// leaves the router with a stale URL it may later restore,
+				// resetting the lab to defaults on the next navigation
+				if (seq === writeSeq) replaceState(`${base}/lab/${h}`, {});
 			});
 		}, 300);
 		return () => clearTimeout(t);
 	});
 
-	function generate() {
+	function generate(quiet = false) {
 		const p = prepare(src);
 		if (p === null) {
+			// mid-stream a truncated source often fails to parse — keep
+			// the last good picture rather than flashing an error
+			if (quiet) return;
 			input = null;
 			groups = [];
 			genErr = 'nothing parsed: unsupported or empty diagram';
@@ -114,24 +142,71 @@
 		parseWarnings = p.graph.warnings;
 		input = p.input;
 		fitted = false; // a new diagram gets a fresh fit
+		phase = -1; // and lands on the result view, not a stale phase index
 	}
 	let layoutMs = $state<number | null>(null);
+	// [stream] replays the source a few characters at a time, rendering
+	// each partial parse through the fast mode — the streaming behaviour
+	// a live terminal would show; click again to stop.
+	let streaming = $state(false);
+	async function streamSim() {
+		if (streaming) {
+			streaming = false;
+			return;
+		}
+		streaming = true;
+		const full = src;
+		const step = Math.max(3, Math.round(full.length / 150));
+		for (let i = step; i < full.length && streaming; i += step) {
+			src = full.slice(0, i);
+			generate(true);
+			await new Promise((r) => setTimeout(r, 90));
+		}
+		src = full;
+		streaming = false;
+		generate();
+	}
 	// With a fit target the candidate loop runs and the winner is traced;
 	// its table lands below the options, a click adopts that candidate.
 	let fitW = $state<number | null>(null);
 	let candidates = $state<Candidate[] | null>(null);
 	let chosen = $state<LayoutOptions | null>(null);
-	// The engine runs whenever the input or any option changes.
+	// A clicked candidate renders as a preview without touching the
+	// settings; [use] adopts it. Editing anything (options, source, fit)
+	// makes the stored fingerprints stale and the preview falls away.
+	let preview = $state<{ c: Candidate; o: string; inp: unknown } | null>(null);
+	function togglePreview(c: Candidate) {
+		preview =
+			preview !== null && preview.c === c
+				? null
+				: { c, o: JSON.stringify($state.snapshot(opts)), inp: input };
+	}
+	// The engine runs whenever the input, any option, or the preview
+	// selection changes.
 	$effect(() => {
 		const inp = $state.snapshot(input);
 		const o = $state.snapshot(opts);
 		const target = fitW;
+		const fast = streaming;
+		let pv = preview;
+		if (pv !== null && (pv.o !== JSON.stringify(o) || pv.inp !== input)) {
+			pv = null;
+			untrack(() => (preview = null));
+		}
 		if (inp === null) return;
 		try {
 			const snaps: Snapshot[] = [];
 			const t0 = performance.now();
 			let res: ReturnType<typeof layout>;
-			if (target !== null && target > 0) {
+			if (pv !== null) {
+				// the preview pipeline: one plain layout with the
+				// candidate's options; the table keeps the loop's results
+				res = layout(inp, $state.snapshot(pv.c.opts), (s) => snaps.push(s));
+			} else if (fast) {
+				res = layoutFast(inp, target !== null && target > 0 ? { width: target } : {}, (s) =>
+					snaps.push(s)
+				);
+			} else if (target !== null && target > 0) {
 				const r = layoutBest(inp, o, { width: target }, (s) => snaps.push(s));
 				res = r.result;
 				candidates = r.candidates;
@@ -236,7 +311,6 @@
 	// never on option changes or phase steps, so the camera stays where
 	// the user put it; fit() reads `good` and writes the camera, so it
 	// runs untracked.
-	let fitted = $state(false);
 	const hasPic = $derived(good !== null && good !== undefined);
 	$effect(() => {
 		void panelW;
@@ -288,6 +362,7 @@
 		const c = caret;
 		if (!st) return;
 		for (const el of st.querySelectorAll('.sel')) el.classList.remove('sel');
+		for (const el of st.querySelectorAll('.selhl')) el.classList.remove('selhl');
 		if (!c) return;
 		const q =
 			c.kind === 'node'
@@ -296,6 +371,19 @@
 					? `[data-edge="${c.index}"]`
 					: `[data-port="${CSS.escape(c.id)}"][data-pnode="${CSS.escape(c.node)}"]`;
 		for (const el of st.querySelectorAll(q)) el.classList.add('sel');
+		// the neighbourhood: a node's edges, an edge's endpoint nodes
+		const near =
+			c.kind === 'node'
+				? `[data-from="${CSS.escape(c.id)}"],[data-to="${CSS.escape(c.id)}"]`
+				: c.kind === 'edge'
+					? (() => {
+							const e = good?.snap.edges[c.index];
+							return e
+								? `[data-node="${CSS.escape(e.from)}"],[data-node="${CSS.escape(e.to)}"]`
+								: null;
+						})()
+					: null;
+		if (near !== null) for (const el of st.querySelectorAll(near)) el.classList.add('selhl');
 	});
 
 	// --- hover: the item under the pointer, and its edges lit up
@@ -329,6 +417,11 @@
 		} else {
 			const item = good.snap.edges[Number(t.getAttribute('data-edge'))];
 			hover = item ? { kind: 'edge', item } : null;
+			for (const end of [t.getAttribute('data-from'), t.getAttribute('data-to')]) {
+				if (end === null) continue;
+				for (const el of st.querySelectorAll(`[data-node="${CSS.escape(end)}"]`))
+					el.classList.add('hl');
+			}
 		}
 	}
 </script>
@@ -360,23 +453,33 @@
 		{#if candidates !== null}
 			<div class="cands">
 				{#each candidates as c (c.label)}
-					<button
-						class="ghost cand"
-						class:active={c.opts === chosen}
-						title="adopt these options"
-						onclick={() => {
-							opts = JSON.parse(JSON.stringify(c.opts)) as LayoutOptions;
-							fitW = null;
-						}}
-					>
-						{c.opts === chosen ? '→' : ' '}
-						{c.label} · {c.width}×{c.height}{c.fits === true ? ' ✓' : ''}
-					</button>
+					<div class="cand-row" class:active={preview !== null && preview.c === c}>
+						<button
+							class="ghost cand"
+							title="preview this candidate (settings stay put)"
+							onclick={() => togglePreview(c)}
+							>{`${preview !== null && preview.c === c ? '◉' : c.opts === chosen ? '→' : ' '} ${c.label} · ${c.width}×${c.height}${c.fits === true ? ' ✓' : ''}`}</button
+						>
+						<button
+							class="ghost use"
+							title="adopt these options into the settings"
+							onclick={() => {
+								opts = JSON.parse(JSON.stringify(c.opts)) as LayoutOptions;
+								fitW = null;
+							}}>[use]</button
+						>
+					</div>
 				{/each}
 			</div>
 		{/if}
 		<div class="row wrap">
-			<button class="ghost" onclick={generate}>[generate]</button>
+			<button class="ghost" onclick={() => generate()}>[generate]</button>
+			<button
+				class="ghost"
+				class:active={streaming}
+				title="replay the source as if it were streaming, rendered with the fast mode"
+				onclick={streamSim}>[stream]</button
+			>
 			{#each groups as g, i}
 				<button class="ghost" class:active={i === phase} onclick={() => show(i, g.steps.length - 1)}>
 					{g.name}{#if g.steps.length > 1}<sup>{g.steps.length - 1}</sup>{/if}
@@ -611,6 +714,13 @@
 		stroke: var(--cmd);
 		stroke-width: 2.5;
 	}
+	.stage :global(g.selhl polyline),
+	.stage :global(g.selhl rect) {
+		stroke: var(--gold);
+	}
+	.stage :global(g.selhl circle) {
+		fill: var(--gold);
+	}
 	.stage :global(g.sel circle) {
 		fill: var(--cmd);
 	}
@@ -640,8 +750,22 @@
 	}
 	.cand {
 		white-space: pre;
+		/* buttons default to user-select:none; the label is worth copying */
+		user-select: text;
 	}
-	.cand.active {
+	.cand-row {
+		display: flex;
+		gap: 0.4rem;
+		align-items: baseline;
+	}
+	.cand-row .use {
+		visibility: hidden;
+		font-size: 0.8rem;
+	}
+	.cand-row:hover .use {
+		visibility: visible;
+	}
+	.cand-row.active .cand {
 		color: var(--accent);
 	}
 </style>

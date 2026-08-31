@@ -162,11 +162,48 @@ export function buildGraph(input: LayoutInput): LGraph {
 /**
  * Every phase takes a graph and returns a new one: it clones its input and
  * works on the clone, so callers keep what they passed in (the candidate
- * loop and the lab's edit-and-continue depend on it). `structuredClone`
- * keeps the internal references (ports ↔ nodes ↔ edges) intact.
+ * loop and the lab's edit-and-continue depend on it). Hand-rolled — the
+ * shape is known and `structuredClone` was the engine's single biggest
+ * cost; the maps keep the internal references (ports ↔ nodes ↔ edges)
+ * intact, including their array orders.
  */
 export function cloneGraph(g: LGraph): LGraph {
-  return structuredClone(g)
+  const nm = new Map<LNode, LNode>()
+  const pm = new Map<LPort, LPort>()
+  const em = new Map<LEdge, LEdge>()
+  const nodes = g.nodes.map((n) => {
+    const nn = { ...n }
+    nm.set(n, nn)
+    nn.ports = n.ports.map((q) => {
+      const qq = { ...q, node: nn }
+      pm.set(q, qq)
+      return qq
+    })
+    return nn
+  })
+  const edges = g.edges.map((e) => {
+    const ee: LEdge = {
+      ...e,
+      src: pm.get(e.src) as LPort,
+      dst: pm.get(e.dst) as LPort,
+      labels: e.labels.map((l) => ({ ...l })),
+      route: e.route === null ? null : e.route.map(([x, y]): Pt => [x, y]),
+      placed: e.placed.map((l) => ({ ...l })),
+    }
+    em.set(e, ee)
+    return ee
+  })
+  for (const [q, qq] of pm) {
+    qq.in = q.in.map((e) => em.get(e) as LEdge)
+    qq.out = q.out.map((e) => em.get(e) as LEdge)
+  }
+  return {
+    nodes,
+    edges,
+    layers: g.layers.map((row) => row.map((n) => nm.get(n) as LNode)),
+    spacing: { ...g.spacing },
+    warnings: [...g.warnings],
+  }
 }
 
 /** The graph as the lab draws it; fields still at `-1` are left out. */

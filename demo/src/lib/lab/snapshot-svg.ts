@@ -379,7 +379,7 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 				: `<rect x="${PX(f.x) + 6}" y="${PY(f.y) - fs * 0.6}" width="${tw}" height="${fs * 1.2}" fill="${C.labelBg}"/>` +
 					`<text x="${PX(f.x) + 10}" y="${PY(f.y) + fs * 0.35}" fill="${C.frame}">${title}</text>`;
 		push(
-			`<g data-node="${esc(f.n.id)}"><rect ${rectAttrs(f)} fill="${C.frame}" fill-opacity="0.06" stroke="${C.frame}" stroke-dasharray="6 4" pointer-events="all"/>` +
+			`<g data-node="${esc(f.n.id)}"><rect ${rectAttrs(f)} fill="${C.frame}" fill-opacity="0.14" stroke="${C.frame}" stroke-dasharray="6 4" pointer-events="all"/>` +
 				`${chip}</g>`
 		);
 	}

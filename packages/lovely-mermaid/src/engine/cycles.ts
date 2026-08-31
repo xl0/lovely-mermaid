@@ -16,7 +16,7 @@ import type { CyclesOptions } from './types.ts'
 export function breakCycles(g0: LGraph, opts: CyclesOptions): LGraph {
   const g = cloneGraph(g0)
   if (opts.strategy === 'dfs') dfs(g)
-  else greedy(g)
+  else greedy(g, opts.strategy === 'greedy2')
   return g
 }
 
@@ -28,7 +28,7 @@ export function breakCycles(g0: LGraph, opts: CyclesOptions): LGraph {
  * are reversed. Each edge is discounted exactly once, when its first
  * endpoint is placed.
  */
-function greedy(g: LGraph): void {
+function greedy(g: LGraph, rev = false): void {
   const n = g.nodes.length
   const index = new Map<LNode, number>(g.nodes.map((v, i) => [v, i]))
   const indeg = new Int32Array(n)
@@ -77,7 +77,8 @@ function greedy(g: LGraph): void {
     }
     if (remaining === 0 || sinks.length > 0 || sources.length > 0) continue
     let best = -1
-    for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const i = rev ? n - 1 - j : j
       if (mark[i] !== 0) continue
       if (best < 0 || outdeg[i] - indeg[i] > outdeg[best] - indeg[best]) best = i
     }

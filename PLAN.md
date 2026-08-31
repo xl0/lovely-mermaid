@@ -218,6 +218,115 @@ visualization comes first and every phase must be viewable.
       non-regressing measurements, remember rejected rows. session-er
       @100: 89×242 → 93×161. Hard-target policy confirmed by the user
       (terminal width is a wall).
+- [ ] Routing dither (open, 2026-09-01): parallel-chain bundles jog in
+      sync (image-46 kinks) — the per-row windows genuinely exclude a
+      common column because packed neighbours shift; individual-chain
+      smoothing can't fire (bundle at pitch), continuity targeting
+      widened +6 for no gain (both tried, reverted). Root cause is
+      ordering: chains' relative order dithers between rows. Fix
+      belongs in the parked width-aware ordering work. Also PA→● style
+      jogs: port at corner clamp, target outside the box; needs the
+      node to slide right past a trunk dummy (order pinch).
+- [x] Port tuning (2026-09-01): tunePorts slides free N/S ports to
+      their partners' median columns (order/pitch kept, corners and
+      fixed/self-loop ports excluded), second relax pass after. Border
+      double-bends and node-hugging kinks gone; every corpus number
+      improved or held (arch-state@100 →99×704, session-er@100 →96×152,
+      arch-system@134 →121×316, uncapped arch-state →232×357).
+- [x] Transitive compactRight (2026-09-01): a width-definer blocked by
+      a slack-having neighbour now compresses the whole prefix (pushed
+      only as far as needed). Firsts: arch-state@100 fits 99×726,
+      session-er@100 96×155 (no squeeze needed), arch-system@134
+      121×326, @150 146×286; uncapped arch-state 277×432 → 232×383.
+      Minor metric ticks: arch-classes 314→318w, state-regions 45→46w
+      (different candidates win; acceptable). Parked idea from review:
+      squeeze layer *insertion* (shift a suffix down one layer to give
+      chain-locked frames / stranded nodes a row) — revisit if fits
+      stall again.
+- [x] Squeeze move keys (2026-09-01): rejection bookkeeping was
+      row-granular — a failed row evacuation poisoned that row's tall
+      moves too. Keys are per-move now (`row:l` / `tall:v:t`), which
+      unlocked chained sequences (evacuate a small frame, then its old
+      band). session-er@130 → 127×126. arch-state@100: the two fattest
+      frames are chain-locked (g1→g2 direct edge) — pairing them is
+      structurally impossible; remaining tall pairings measured wider
+      (182>166) and the width-first guard refuses, by policy.
+- [x] compactRight jog fix (2026-09-01): partial tier slides broke
+      port alignment with zero width gain — chains dithered ±1 column.
+      Now gain-aware and whole-tier. Mixed odd/even node widths need no
+      parity bump: port-column alignment absorbs them (isolated chain
+      renders dead straight).
+- [x] Width compaction + ladder descent (2026-09-01): compactRight in
+      routing pulls extent-defining nodes left within row slack (frames
+      stranded right of trunk fans — the user's screenshot case); the
+      refine ladder descends geometrically (0.7×) past stalls. Firsts:
+      arch-system@134 fits 130×388, @150 fits 143×336, session-er@130
+      fits 130×127. arch-state@100 166×590. ~0.5-0.8s heavy cases.
+- [x] Squeeze v3 for oversized targets (2026-09-01): tall-node moves
+      (band height = tallest node; a tall frame moves beside another
+      tall band, the source collapses to its shorter rest), finalists
+      get squeezeLoose (admission = width already paid when the target
+      is unreachable; guard still ratchets width down), all-MISS cases
+      always run finalists, refine cap clamps at 4 instead of giving
+      up. arch-state@100: 190×689 → 173×622 with frames pairing up;
+      arch-system@134: 160×380 → 159×353; session-er@173: 154×108 →
+      159×97. The inner-cap-from-target experiment was tried and
+      reverted (squeeze packs towers better than pre-widened frames).
+- [x] MAX_NODES 128 → 256 (2026-09-01): full arch-state is 149 nodes —
+      every earlier arch-state number was a truncated prefix. Full:
+      uncapped 277×422 (203ms), fast@120 ~17ms.
+- [x] Stacked self-loops (2026-09-01): k loops per node render as
+      nested wraps — band tops reserve loops-1 extra rows each side,
+      k assigned east→west from port pos (eastmost exit = tightest
+      wrap), stacked-loops warning gone. Regression test.
+- [x] Lab URL state hardening (2026-09-01): router-aware replaceState
+      (raw history.replaceState desyncs SvelteKit's router, which could
+      restore its stale /lab and reset the source on a later
+      navigation); the derived snapshot JSON is no longer persisted
+      (generate() rebuilds it — arch-state URLs 12.5KB → ~2KB), corrupt
+      hashes warn instead of silently overwriting. If a reset recurs,
+      examples' fragment-hash writes are the same class of suspect.
+- [x] Lab restore regenerates (2026-09-01): reload showed the persisted
+      snapshot (stale picture, no phases) until [generate]; a restored
+      mermaid source now re-runs the pipeline (JSON-only sessions keep
+      their hand-authored text). URL round-trip itself verified fine.
+- [x] Lab blank-screen fix (2026-09-01): init-time generate() wrote
+      `fitted` before its `let` — a TDZ ReferenceError the SvelteKit
+      router swallows into a silent blank page (long-lived HMR tabs
+      masked it). Declaration hoisted; latent since the URL-state work.
+- [x] Squeeze demand model (2026-08-31): room judged by measured band
+      demand (nodes + crossing trunks × (1+edgeEdge)) instead of
+      occupancy intervals — spread trunk columns fragmented every gap
+      and under-admitted; finalist squeezeBudget 24. session-er@100
+      100×161 (height parity, width at the wall); arch-state@120 now
+      fits at 118×498 (was 157×533 MISS).
+- [x] Lab UX (2026-08-31): [stream] replays the source chunk-wise
+      through layoutFast (parse failures keep the last picture);
+      candidate click = preview (settings untouched, fingerprint-stale
+      on any edit), hover [use] adopts.
+- [x] Two render modes (2026-08-31): `layoutFast` = one greedy+bk pass
+      staggered toward the width, best-effort (may exceed), 1-20ms —
+      for rendering while the source streams; `layoutBest` after it
+      settles. Bridge: `traceEngineFast`; examples: `fast` checkbox.
+      Tiny loop budgets now degrade (finalist slots clamped) instead of
+      crashing.
+- [x] Perf round 2 + strategy diversity (2026-08-31): BK and nsSolve
+      hot paths on typed arrays (bit-identical output; NS placement
+      64→35ms/layout on arch-system). Quality-ladder probes tried and
+      rejected (cheap ordering redirects the cap ladder — measured
+      quality loss). New strategies greedy2 (tail ties) and ns2 (flat
+      weights), probe cells pruned to the 7 that ever win, budget 12→16:
+      state-regions 58×55→45×59, arch-classes →314×85, arch-state
+      uncapped →217×423 (width-first metric; flag if too tall). Times:
+      session-er@100 254ms, arch-system@150 386ms, arch-state@120 209ms.
+- [x] Perf round (2026-08-31): hand-rolled cloneGraph (~4× vs
+      structuredClone, was 28-42% of loop time); squeeze probes get
+      squeezeBudget 2 and only the top-2 candidates whose probe kept an
+      iteration re-run with the full budget (+sq finalists, 2 reserved
+      slots). session-er@100 522→334ms, arch-state@120 342→251ms, small
+      diagrams 2-4× faster; arch-system flat (~0.55s, place/order-bound
+      — quality-ladder probes are the next lever if needed). Quality
+      identical across the corpus.
 - [x] Search narrowing (2026-08-31): measured all 4 combos across the
       corpus — none globally dominated (dfs+ns sole-wins arch-system
       @134), so both dims stay; but only the top-2 uncapped probes get

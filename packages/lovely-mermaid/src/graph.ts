@@ -6,7 +6,7 @@
 import { asciiUpper } from './labels.ts'
 
 /** Caps that keep layout bounded; exceeding one drops the diagram to fallback. */
-export const MAX_NODES = 128
+export const MAX_NODES = 256
 export const MAX_EDGES = 512
 export const MAX_GROUPS = 24
 export const MAX_GROUP_DEPTH = 6
