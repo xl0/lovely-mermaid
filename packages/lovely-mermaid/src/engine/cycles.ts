@@ -6,7 +6,7 @@
  * a depth-first search in declaration order — fewer decisions, more
  * reversals; it is the pre-breaking the ELK prototype used.
  *
- * Self-loops never reach this phase (the import drops them).
+ * Self-loops are never a decision: they stay as declared.
  */
 
 import type { LEdge, LGraph, LNode } from './graph.ts'
@@ -34,6 +34,7 @@ function greedy(g: LGraph): void {
   const indeg = new Int32Array(n)
   const outdeg = new Int32Array(n)
   for (const e of g.edges) {
+    if (e.src.node === e.dst.node) continue
     outdeg[index.get(e.src.node) as number]++
     indeg[index.get(e.dst.node) as number]++
   }
@@ -97,6 +98,7 @@ function dfs(g: LGraph): void {
       // reversing moves the edge out of `p.out`, so iterate a copy
       for (const e of [...p.out]) {
         const u = e.dst.node
+        if (u === v) continue
         const s = state.get(u) ?? 0
         if (s === 1) reverse(e)
         else if (s === 0) visit(u)

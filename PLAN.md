@@ -153,17 +153,56 @@ visualization comes first and every phase must be viewable.
       crossing-cost dependencies, X-splitting, tracks → band rows), all
       live in the lab; the bridge renders real terminal output; phases
       are pure `graph → graph`. 2026-08-30.
-- [x] Compounds, global scheme (2026-08-30): border rows at import,
-      nesting edges in layering, frame-aware dummy parents + side columns
-      at split, block sort with sibling-order constraints, border chains
-      win in placement, frames in the result, bridge maps groups and
-      paints frames + titles, lab shows frames. Verdict on the arch
-      corpus: correct but wide (731 vs 312 columns), frames tall, edges
-      through frame interiors — the trade-off to judge next (candidate
-      loop / hybrid with opaque frames for closed subgraphs).
-- [ ] Still to land: labels; routing extras (self-loops, port capacity →
-      merged cells / wider nodes); subgraph `direction` override for
-      closed subgraphs (opaque node laid out on its own).
+- [x] Compounds (2026-08-30): the global scheme (border nodes, nesting
+      edges, blocks — commit 1c0961b) measured 731 columns on
+      `arch-system` against the old 312, spans forced by re-entrant
+      paths; replaced by the recursive scheme (levels, port dummies,
+      fixed ports, routes joined at the border): 316×268, frames tight,
+      every corpus diagram at or under the old width. See CODE.md.
+- [x] Width pass 1 (2026-08-30): BK grew a free-chains dimension (8
+      candidates, port dummies sticky) and a root-only equal-width tie
+      break by summed row extents — arch-system 302×280, arch-state
+      239×335 (old renderer 312×182 / 378×432). TB `edgeEdge: 0` tried,
+      reverted: too dense to read. NS placer has no width
+      term at all (it only straightens); BK is the width-aware strategy.
+      Remaining mid-row holes are ordering artifacts (see CODE.md), the
+      candidate loop's job.
+- [x] Chain relaxation in routing (2026-08-31): dummies are gaps, not
+      columns; chains slide within slack toward their ports, bend-minimal
+      (greedy stabbing). Staircases gone; widths unchanged, arch-state
+      height −17. Reversed edges now flagged in the lab's flat view.
+- [x] Port-order handshake (2026-08-31): the parent pre-orders each
+      child's ports (provisional order pass, free-port placeholders); the
+      child's rim rows are pinned to it and the members follow. Border
+      double-crossings gone, and the inside adapting to the outside cut
+      arch-system to 243×299 (from 302; old renderer 312×182). Port
+      dummies then joined the routing relaxation, anchored on their inner
+      endpoint, and specs group by inner item (same-target ports adjacent,
+      groups in outer order — scattered they pinned every port's slack to
+      zero): ports sit over what they connect to, the hairpin loops at
+      frame borders are gone. arch-system 258×307 (port placement bought
+      back 19 columns; old renderer 312×182), arch-state 239×318.
+- [x] Self-loops (2026-08-31): east-side hook, two columns reserved per
+      loop, every mid phase skips them; member→own-frame edges become
+      frame loops. Subgraph `direction` honoured for closed frames
+      (transposed scope, parity-aware leaf sizes, `altSpacing` profile).
+      Examples page renders with the engine by default (+ engine options
+      panel; legacy/elk/mermaid modes kept).
+- [x] Width-bounded layering (2026-08-31): `layering.maxWidth` staggers
+      an overwide row into two layers (out-heavy nodes move down; always
+      legal). At cap 150: arch-system 258→217, arch-state 239→173 wide
+      for ~+15/+33% height; too low and dummy columns win it back. Off by
+      default. Decided: in practice the target comes from the terminal
+      width, not a hand-set cell count — the consumer passes its width,
+      the loop fits (the cap is soft; real width overshoots by the dummy
+      columns, ~10–15%, so iterate cap = target − observed overhead) and
+      the bridge derives per-level caps (minus frame borders per depth).
+- [ ] Next: the candidate loop (score real width per order/placement/
+      cycle-strategy variant; the 85-column e64/e75 case; the maxWidth
+      cap; dfs vs greedy; bk vs NS). Then labels
+      (decisions pending, deliberately after the loop).
+- [ ] Still to land: port capacity → merged cells / wider nodes; free
+      ports off the title cells; shared edge columns (bundling).
 - [ ] Switch-over: registry routes flowchart/state/class/ER through the
       engine, goldens regenerated, `layout.ts` shrinks to draw fns,
       `layout-elk.ts` deleted.

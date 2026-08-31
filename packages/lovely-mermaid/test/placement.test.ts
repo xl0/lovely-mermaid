@@ -75,10 +75,13 @@ describe('placement', () => {
     const g = placeNodes(ordered(['A>X', 'A>Y', 'B>Y', 'B>Z', 'X>P', 'Z>P']), {}, (_, n) =>
       notes.push(n),
     )
-    expect(notes.length).toBe(4)
+    expect(notes.length).toBe(8)
     expect(
-      notes.every((n) => /^(upper|lower) medians, packed (left|right) · width \d+$/.test(n)),
+      notes.every((n) =>
+        /^(upper|lower) medians(, free chains)?, packed (left|right) · width \d+$/.test(n),
+      ),
     ).toBe(true)
+    expect(notes.filter((n) => n.includes('free chains')).length).toBe(4)
     const widths = notes.map((n) => Number(n.match(/width (\d+)/)?.[1]))
     expect(width(g)).toBe(Math.min(...widths))
     expect(valid(g)).toBe(true)

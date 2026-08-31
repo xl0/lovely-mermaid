@@ -1,201 +1,227 @@
 import { describe, expect, test } from 'bun:test'
-import { breakCycles } from '../src/engine/cycles.ts'
-import type { LGraph, LNode } from '../src/engine/graph.ts'
-import { ancestors, borderNode, frameOf } from '../src/engine/graph.ts'
 import { layout } from '../src/engine/index.ts'
-import { assignLayers, splitLongEdges } from '../src/engine/layering.ts'
-import { orderNodes } from '../src/engine/ordering.ts'
-import { placeNodes } from '../src/engine/placement.ts'
-import { routeEdges } from '../src/engine/routing.ts'
-import type { Rect } from '../src/engine/types.ts'
-import { graph, pure, spacing } from './engine-helpers.ts'
+import type { LayoutResult, Pt, Rect } from '../src/engine/types.ts'
+import { inputOf, spacing } from './engine-helpers.ts'
 
 type Groups = Record<string, string[]>
-const layered = (edges: string[], groups: Groups): LGraph =>
-  splitLongEdges(assignLayers(breakCycles(graph(edges, groups), {}), {}))
-const ordered = (edges: string[], groups: Groups): LGraph => orderNodes(layered(edges, groups), {})
-const placed = (edges: string[], groups: Groups): LGraph => placeNodes(ordered(edges, groups), {})
-const routed = (edges: string[], groups: Groups): LGraph => routeEdges(placed(edges, groups), {})
-const node = (g: LGraph, id: string): LNode => g.nodes.find((n) => n.id === id) as LNode
-const span = (g: LGraph, c: string): [number, number] => [
-  borderNode(g, c, 'top').layer,
-  borderNode(g, c, 'bottom').layer,
-]
-const inside = (r: Rect, n: LNode): boolean =>
-  n.x > r.x && n.x + n.w <= r.x + r.w - 1 && n.y > r.y && n.y + n.h <= r.y + r.h - 1
+const lay = (edges: string[], groups: Groups, extra = {}): LayoutResult =>
+  layout({ ...inputOf(edges, groups), ...extra })
+const inside = (r: Rect, n: Rect): boolean =>
+  n.x > r.x && n.x + n.w < r.x + r.w && n.y > r.y && n.y + n.h < r.y + r.h
 const disjoint = (a: Rect, b: Rect): boolean =>
   a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y
-const contains = (a: Rect, b: Rect): boolean =>
-  b.x > a.x && b.y > a.y && b.x + b.w < a.x + a.w && b.y + b.h < a.y + a.h
-
-/** Every compound's nodes are one contiguous run in every layer. */
-function contiguous(g: LGraph): boolean {
-  for (const row of g.layers) {
-    for (const c of g.compounds) {
-      const flags = row.map((n) => ancestors(g, n).includes(c.id))
-      const first = flags.indexOf(true)
-      const last = flags.lastIndexOf(true)
-      if (first >= 0 && flags.slice(first, last + 1).includes(false)) return false
-    }
+const onBorder = (r: Rect, [x, y]: Pt): boolean =>
+  x >= r.x && x < r.x + r.w && (y === r.y || y === r.y + r.h - 1)
+/** Orthogonal, no zero-length steps, ends where it should. */
+const wellFormed = (route: Pt[], from: Rect, to: Rect): boolean => {
+  if (route.length < 2) return false
+  for (let i = 1; i < route.length; i++) {
+    const [ax, ay] = route[i - 1]
+    const [bx, by] = route[i]
+    if ((ax !== bx) === (ay !== by)) return false
   }
-  return true
+  const touches = (r: Rect, [x, y]: Pt): boolean =>
+    x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
+  return touches(from, route[0]) && touches(to, route[route.length - 1])
 }
+const box = (res: LayoutResult, id: string): Rect => (res.nodes[id] ?? res.compounds[id]) as Rect
 
-describe('compound graphs', () => {
-  test('import: border rows per compound, parents, edges to a compound hit its rows', () => {
-    const g = graph(['A>B', 'X>G', 'G>Y'], { G: ['A', 'B'] })
-    expect(node(g, 'A').parent).toBe('G')
-    expect(node(g, 'X').parent).toBeUndefined()
-    expect(borderNode(g, 'G', 'top').border).toBe('top')
-    expect(g.edges.map((e) => `${e.src.node.id}>${e.dst.node.id}`)).toEqual([
-      'A>B',
-      'X>G/top',
-      'G/bottom>Y',
-    ])
-  })
-
-  test('layering: the rows enclose the members and nest, nothing else is left behind', () => {
-    const g = pure(
-      breakCycles(graph(['A>B', 'B>C', 'X>A'], { G: ['A', 'B', 'H'], H: ['C'] }), {}),
-      (g) => assignLayers(g, {}),
-    )
-    const [gTop, gBottom] = span(g, 'G')
-    const [hTop, hBottom] = span(g, 'H')
-    expect(gTop).toBeLessThan(node(g, 'A').layer)
-    expect(node(g, 'B').layer).toBeLessThan(gBottom)
-    expect(gTop).toBeLessThan(hTop)
-    expect(hTop).toBeLessThan(node(g, 'C').layer)
-    expect(node(g, 'C').layer).toBeLessThan(hBottom)
-    expect(hBottom).toBeLessThan(gBottom)
-    expect(node(g, 'X').layer).toBeLessThan(node(g, 'A').layer)
-    // the nesting edges are gone; the real ones remain
-    expect(g.edges.map((e) => e.id).sort()).toEqual(['e0', 'e1', 'e2'])
-    for (const n of g.nodes) for (const p of n.ports) expect(p.in.length + p.out.length).toBe(1)
-  })
-
-  test('layering: a frame hugs its content instead of floating up', () => {
-    // X→Y→Z outside, then Z→A inside G: G's top row should sit right above A
-    const g = assignLayers(graph(['X>Y', 'Y>Z', 'Z>A'], { G: ['A'] }), {})
-    expect(span(g, 'G')[0]).toBe(node(g, 'A').layer - 1)
-  })
-
-  test('layering: an empty compound is two rows; an edge into its own frame is reversed', () => {
-    const g = assignLayers(graph(['A>G'], { G: ['A'], E: [] }), {})
-    const [eTop, eBottom] = span(g, 'E')
-    expect(eBottom).toBe(eTop + 1)
-    expect(g.edges[0].reversed).toBe(true)
-    expect(g.edges[0].src.node.id).toBe('G/top')
-  })
-
-  test('split: dummies stay inside the frame down to its bottom row, side columns are added', () => {
-    // A in G, far below is Z outside; the chain leaves through G's bottom row
-    const g = layered(['A>Z:4', 'A>B'], { G: ['A', 'B'] })
-    const [, gBottom] = span(g, 'G')
-    for (const n of g.nodes) {
-      if (n.kind !== 'dummy') continue
-      expect(n.parent).toBe(n.layer <= gBottom ? 'G' : undefined)
-    }
-    const [gTop] = span(g, 'G')
-    for (let l = gTop; l <= gBottom; l++) {
-      const ids = g.layers[l].map((n) => n.id)
-      expect(ids).toContain(`G/left@${l}`)
-      expect(ids).toContain(`G/right@${l}`)
-    }
-    const chain = g.edges.filter((e) => e.border === true)
-    expect(chain.length).toBe(2 * (gBottom - gTop))
-  })
-
-  test('ordering: blocks are contiguous, side columns at their ends, and crossings still drop', () => {
-    const g = pure(
-      layered(['A>Y', 'B>X', 'C>Z', 'A', 'B', 'C', 'X', 'Y', 'Z'], { G: ['B', 'X'] }),
-      (g) => orderNodes(g, {}),
-    )
-    expect(contiguous(g)).toBe(true)
-    for (const row of g.layers) {
-      const flags = row.map((n) => ancestors(g, n).includes('G'))
-      const first = flags.indexOf(true)
-      if (first < 0) continue
-      expect(row[first].border).toBe('left')
-      expect(row[flags.lastIndexOf(true)].border).toBe('right')
-    }
-    // the outside pair A→Y, C→Z untangles around the block
-    const order = (id: string): number => node(g, id).order
-    expect(order('A') < order('C')).toBe(order('Y') < order('Z'))
-  })
-
-  test('placement: side columns are straight, frames nest and siblings are disjoint', () => {
-    const g = pure(
-      ordered(['A>B', 'B>C', 'C>D', 'X>A', 'D>Y', 'P>Q'], {
-        G: ['A', 'B', 'H'],
-        H: ['C', 'D'],
-        K: ['P', 'Q'],
-      }),
-      (g) => placeNodes(g, {}),
-    )
-    for (const c of g.compounds) {
-      for (const side of ['left', 'right']) {
-        const xs = g.nodes.filter((n) => n.origin === c.id && n.border === side).map((n) => n.x)
-        expect(new Set(xs).size).toBe(1)
-      }
-    }
-    const r = routeEdges(g, {})
-    const frames = new Map(g.compounds.map((c) => [c.id, frameOf(r, c.id) as Rect]))
-    for (const n of r.nodes) {
-      if (n.kind !== 'node' || n.parent === undefined) continue
-      expect(inside(frames.get(n.parent) as Rect, n)).toBe(true)
-    }
-    expect(contains(frames.get('G') as Rect, frames.get('H') as Rect)).toBe(true)
-    expect(disjoint(frames.get('G') as Rect, frames.get('K') as Rect)).toBe(true)
-    expect(frames.get('G')?.w).toBeGreaterThanOrEqual(3 + 2) // titleW 3 plus corners
-  })
-
-  test('placement: an edge entering a frame through its side bends, the frame does not', () => {
-    // G spans layers that K also spans; A→Q enters K from the side
-    const g = routed(['A>B', 'B>C', 'P>Q', 'A>Q:3'], { G: ['A', 'B', 'C'], K: ['P', 'Q'] })
-    for (const c of ['G', 'K']) {
-      const xs = g.nodes.filter((n) => n.origin === c && n.border === 'left').map((n) => n.x)
-      expect(new Set(xs).size).toBe(1)
-    }
-  })
-
-  test('network simplex placer keeps the columns straight too', () => {
-    const g = placeNodes(ordered(['A>B', 'B>C', 'X>A', 'C>Y'], { G: ['A', 'B', 'C'] }), {
-      strategy: 'networkSimplex',
+describe('compound graphs (recursive)', () => {
+  test('frames hold their members, nest, and stay apart; the canvas holds the frames', () => {
+    const res = lay(['A>B', 'B>C', 'C>D', 'X>A', 'D>Y', 'P>Q'], {
+      G: ['A', 'B', 'H'],
+      H: ['C', 'D'],
+      K: ['P', 'Q'],
     })
-    const xs = g.nodes.filter((n) => n.origin === 'G' && n.border === 'left').map((n) => n.x)
-    expect(new Set(xs).size).toBe(1)
-  })
-
-  test('layout: frames in the result, sideways title becomes a least span', () => {
-    const input = {
-      dir: 'down' as const,
-      spacing,
-      nodes: [
-        { id: 'A', w: 5, h: 3, parent: 'G' },
-        { id: 'B', w: 5, h: 3 },
-      ],
-      edges: [{ id: 'e', from: 'A', to: 'B' }],
-      compounds: [{ id: 'G', titleW: 20 }],
+    const { G, H, K } = res.compounds
+    for (const id of ['A', 'B']) expect(inside(G, res.nodes[id])).toBe(true)
+    for (const id of ['C', 'D']) expect(inside(H, res.nodes[id])).toBe(true)
+    expect(inside(G, H)).toBe(true)
+    expect(disjoint(G, K)).toBe(true)
+    for (const id of ['X', 'Y']) expect(disjoint(G, res.nodes[id])).toBe(true)
+    for (const r of [...Object.values(res.nodes), ...Object.values(res.compounds)]) {
+      expect(r.x + r.w).toBeLessThanOrEqual(res.width)
+      expect(r.y + r.h).toBeLessThanOrEqual(res.height)
     }
-    const down = layout(input)
-    expect(down.compounds.G.w).toBeGreaterThanOrEqual(22)
-    expect(inside(down.compounds.G, { ...down.nodes.A, id: 'A' } as LNode)).toBe(true)
-    expect(down.width).toBeGreaterThanOrEqual(down.compounds.G.x + down.compounds.G.w)
-    const right = layout({ ...input, dir: 'right' })
-    // the title runs along the flow axis: the frame is at least that wide
-    expect(right.compounds.G.w).toBeGreaterThanOrEqual(22)
-    expect(right.compounds.G.h).toBeLessThan(22)
-    expect(inside(right.compounds.G, { ...right.nodes.A, id: 'A' } as LNode)).toBe(true)
+    // every edge is routed as one polyline from its source box to its target box
+    for (const e of inputOf(['A>B', 'B>C', 'C>D', 'X>A', 'D>Y', 'P>Q']).edges) {
+      const r = res.edges[e.id]
+      expect(r).toBeDefined()
+      expect(wellFormed(r.route, box(res, e.from), box(res, e.to))).toBe(true)
+    }
   })
 
-  test('layout: no routed border edges, frames grow the canvas, random graphs stay sane', () => {
+  test('a crossing edge passes a port on the frame border, straight through it', () => {
+    const res = lay(['X>A', 'A>B', 'B>Y'], { G: ['A', 'B'] })
+    const G = res.compounds.G
+    const inRoute = res.edges.e0.route
+    const outRoute = res.edges.e2.route
+    // X→A enters at the top row, B→Y leaves at the bottom row
+    const entry = inRoute.find((p) => onBorder(G, p)) as Pt
+    expect(entry[1]).toBe(G.y)
+    const exit = outRoute.find((p) => onBorder(G, p)) as Pt
+    expect(exit[1]).toBe(G.y + G.h - 1)
+    // the crossing is vertical: the points before and after share the column
+    for (const [route, pt] of [
+      [inRoute, entry],
+      [outRoute, exit],
+    ] as const) {
+      const i = route.findIndex((p) => p[0] === pt[0] && p[1] === pt[1])
+      const before = route[i - 1]
+      const after = route[i + 1]
+      for (const q of [before, after]) if (q !== undefined) expect(q[0]).toBe(pt[0])
+    }
+    // the frame is two rows taller than a bare member: the port rows
+    expect(G.h).toBeGreaterThanOrEqual(res.nodes.A.h + res.nodes.B.h + 2 + 2)
+  })
+
+  test('an edge to the compound itself ends on the frame; member-to-frame becomes a frame loop', () => {
+    const res = lay(['X>G', 'G>Y', 'A>G'], { G: ['A'] })
+    const G = res.compounds.G
+    expect(onBorder(G, res.edges.e0.route.at(-1) as Pt)).toBe(true)
+    expect(onBorder(G, res.edges.e1.route[0])).toBe(true)
+    // A→G maps to the frame at the top level: a loop off its east border
+    const aa = res.edges.e2.route
+    expect(aa.length).toBe(4)
+    expect(aa[0][0]).toBe(G.x + G.w - 1)
+    expect(aa[1][0]).toBe(G.x + G.w + 1)
+  })
+
+  test('a cycle between two frames is broken outside; the reversed edge still runs source→target', () => {
+    const res = lay(['A>P', 'P>A', 'A>B', 'P>Q'], { G: ['A', 'B'], K: ['P', 'Q'] })
+    const { G, K } = res.compounds
+    expect(disjoint(G, K)).toBe(true)
+    for (const [id, from, to] of [
+      ['e0', 'A', 'P'],
+      ['e1', 'P', 'A'],
+    ]) {
+      const route = res.edges[id].route
+      expect(wellFormed(route, res.nodes[from], res.nodes[to])).toBe(true)
+      // crosses both frames' borders
+      expect(route.some((p) => onBorder(G, p))).toBe(true)
+      expect(route.some((p) => onBorder(K, p))).toBe(true)
+    }
+  })
+
+  test('an edge through two levels of frames', () => {
+    const res = lay(['X>C', 'C>Y'], { G: ['H'], H: ['C'] })
+    const { G, H } = res.compounds
+    expect(inside(G, H)).toBe(true)
+    for (const id of ['e0', 'e1']) {
+      const route = res.edges[id].route
+      expect(route.filter((p) => onBorder(G, p)).length).toBe(1)
+      expect(route.filter((p) => onBorder(H, p)).length).toBe(1)
+    }
+    expect(wellFormed(res.edges.e0.route, res.nodes.X, res.nodes.C)).toBe(true)
+    expect(wellFormed(res.edges.e1.route, res.nodes.C, res.nodes.Y)).toBe(true)
+  })
+
+  test('the frame is at least as wide as its title; sideways the title runs along the flow', () => {
+    const wide = { compounds: [{ id: 'G', titleW: 30 }] }
+    const down = lay(['A>B'], { G: ['A'] }, wide)
+    expect(down.compounds.G.w).toBeGreaterThanOrEqual(32)
+    expect(inside(down.compounds.G, down.nodes.A)).toBe(true)
+    const right = lay(['A>B'], { G: ['A'] }, { ...wide, dir: 'right' })
+    expect(right.compounds.G.w).toBeGreaterThanOrEqual(32)
+    expect(right.compounds.G.h).toBeLessThan(32)
+    expect(inside(right.compounds.G, right.nodes.A)).toBe(true)
+    expect(wellFormed(right.edges.e0.route, right.nodes.A, right.nodes.B)).toBe(true)
+  })
+
+  test('an empty compound is a box; bad parents are cut with a warning', () => {
+    const res = layout({
+      ...inputOf(['A>B'], { E: [] }),
+      compounds: [
+        { id: 'E', titleW: 3 },
+        { id: 'F', parent: 'nowhere' },
+        { id: 'C1', parent: 'C2' },
+        { id: 'C2', parent: 'C1' },
+      ],
+    })
+    expect(res.compounds.E.h).toBe(2)
+    expect(res.compounds.E.w).toBeGreaterThanOrEqual(5)
+    expect(res.compounds.F).toBeDefined()
+    expect(res.warnings.some((w) => w.includes('nowhere'))).toBe(true)
+    expect(res.warnings.some((w) => w.includes('nests in itself'))).toBe(true)
+  })
+
+  test('the parent owns a frame port order: no crossing on the border', () => {
+    // X→B and Y→A would cross twice at G's border if the ports kept the
+    // inner declaration order; either the ports or the sources reorder,
+    // and the members inside follow the pinned ports
+    for (const edges of [
+      ['X>B', 'Y>A', 'A', 'B'],
+      ['X>A', 'Y>B', 'B', 'A'],
+    ]) {
+      const res = layout(inputOf(edges, { G: ['A', 'B'] }))
+      const out = Math.sign(res.nodes.X.x - res.nodes.Y.x)
+      const bx = res.nodes[edges[0].slice(2, 3)].x
+      const ax = res.nodes[edges[1].slice(2, 3)].x
+      expect(Math.sign(bx - ax)).toBe(out)
+    }
+  })
+
+  test('a frame port slides over its inner endpoint', () => {
+    // P, Q, A hang under the border; each edge should cross the border
+    // above its member, not at the frame's left corner
+    const res = layout(inputOf(['X>A', 'Y>P', 'Z>Q'], { G: ['P', 'Q', 'A'] }))
+    const G = res.compounds.G
+    for (const [id, target] of [
+      ['e0', 'A'],
+      ['e1', 'P'],
+      ['e2', 'Q'],
+    ]) {
+      const t = res.nodes[target]
+      const cross = res.edges[id].route.find(([, y]) => y === G.y) as Pt
+      expect(cross[0]).toBeGreaterThanOrEqual(t.x)
+      expect(cross[0]).toBeLessThan(t.x + t.w)
+    }
+  })
+
+  test('a closed subgraph may turn against the flow; an open one may not', () => {
+    const alt = { ...spacing, nodeNode: 1 }
+    const base = inputOf(['A>B', 'X>G', 'G>Y'], { G: ['A', 'B'] })
+    const res = layout({
+      ...base,
+      compounds: [{ id: 'G', titleW: 3, dir: 'right' }],
+      altSpacing: alt,
+    })
+    // inside G the flow runs right: A beside B, boxes still 5×3
+    expect(res.nodes.A.y).toBe(res.nodes.B.y)
+    expect(res.nodes.A.x + res.nodes.A.w).toBeLessThanOrEqual(res.nodes.B.x)
+    expect([res.nodes.A.w, res.nodes.A.h]).toEqual([5, 3])
+    expect(inside(res.compounds.G, res.nodes.A)).toBe(true)
+    // a crossing edge voids the override
+    const open = layout({
+      ...inputOf(['X>A', 'A>B'], { G: ['A', 'B'] }),
+      compounds: [{ id: 'G', titleW: 3, dir: 'right' }],
+      altSpacing: alt,
+    })
+    expect(open.nodes.A.y + open.nodes.A.h).toBeLessThanOrEqual(open.nodes.B.y)
+  })
+
+  test('a right layout with a down subgraph: the child stacks, the rest flows right', () => {
+    const res = layout({
+      ...inputOf(['A>B', 'X>G'], { G: ['A', 'B'] }),
+      dir: 'right',
+      compounds: [{ id: 'G', titleW: 3, dir: 'down' }],
+      altSpacing: { ...spacing, nodeNode: 1 },
+    })
+    expect(res.nodes.A.x).toBe(res.nodes.B.x)
+    expect(res.nodes.A.y + res.nodes.A.h).toBeLessThanOrEqual(res.nodes.B.y)
+    expect([res.nodes.A.w, res.nodes.A.h]).toEqual([5, 3])
+    // X sits left of the frame
+    expect(res.nodes.X.x + res.nodes.X.w).toBeLessThanOrEqual(res.compounds.G.x)
+  })
+
+  test('random nested graphs: every edge routed once, frames consistent', () => {
     let seed = 4242
     const rand = (n: number): number => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff
       return seed % n
     }
-    for (let trial = 0; trial < 25; trial++) {
-      const n = 5 + rand(6)
+    for (let trial = 0; trial < 40; trial++) {
+      const n = 4 + rand(7)
       const ids = Array.from({ length: n }, (_, i) => `N${i}`)
       const edges: string[] = []
       for (let i = 0; i < n; i++) {
@@ -207,22 +233,25 @@ describe('compound graphs', () => {
         if (k === 0) groups.G.push(id)
         else if (k === 1) groups.H.push(id)
       }
-      if (rand(2) === 0) groups.G.push('H') // nest H in G
-      const g = routed(edges, groups)
-      expect(contiguous(g)).toBe(true)
-      for (const e of g.edges) {
-        if (e.border === true) expect(e.route).toBeNull()
-        else expect(e.route).not.toBeNull()
+      if (rand(2) === 0) groups.G.push('H')
+      const input = inputOf(edges, groups)
+      const res = layout(input)
+      for (const e of input.edges) {
+        const r = res.edges[e.id]
+        expect(r).toBeDefined()
+        expect(wellFormed(r.route, box(res, e.from), box(res, e.to))).toBe(true)
       }
-      const frames = new Map(g.compounds.map((c) => [c.id, frameOf(g, c.id) as Rect]))
-      for (const nd of g.nodes) {
-        if (nd.kind !== 'node' || nd.parent === undefined) continue
-        expect(inside(frames.get(nd.parent) as Rect, nd)).toBe(true)
+      const { G, H } = res.compounds
+      for (const nd of input.nodes) {
+        if (nd.parent !== undefined)
+          expect(inside(res.compounds[nd.parent], res.nodes[nd.id])).toBe(true)
       }
-      const G = frames.get('G') as Rect
-      const H = frames.get('H') as Rect
-      if (groups.G.includes('H')) expect(contains(G, H)).toBe(true)
+      if (groups.G.includes('H')) expect(inside(G, H)).toBe(true)
       else expect(disjoint(G, H)).toBe(true)
+      for (const r of [...Object.values(res.nodes), ...Object.values(res.compounds)]) {
+        expect(r.x + r.w).toBeLessThanOrEqual(res.width)
+        expect(r.y + r.h).toBeLessThanOrEqual(res.height)
+      }
     }
   })
 })

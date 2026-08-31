@@ -27,8 +27,11 @@ docs/elk-layered.md       ELK Layered code dive (eclipse/elk @ 8aaa3c14): pipeli
                           the matching chapter before implementing a phase.
 docs/learn-plan.md        /learn lesson series roadmap + writing conventions
 demo/src/routes/          / (streaming demo), /render (renderer/ELK toggles +
-                          ELK options dropdown), /examples (gallery over
-                          examples/*.mmd, per-card viewer), /learn
+                          ELK options dropdown), /examples (engine renders by default via the
+                          lab's snapshot SVG on the flat snapshot,
+                          [opts] = the lab's engine options; sequence
+                          falls back to the rule renderer; [legacy],
+                          [elk], [mermaid] modes kept; per-card viewer), /learn
                           (interactive layered-layout lessons through
                           terminal-grid conversion and bounded iterative
                           refinement; each phase closes with its state contract,
@@ -126,6 +129,12 @@ negative tree edge leaves, min-slack head→tail edge enters, cap
 `28·√n` pivots, normalize, Gansner balancing with a filling count shared
 across components) over per-edge `weight` and `minLen`; `longestPath` is
 the start alone; verified against brute force on random small DAGs.
+`maxWidth` staggers any row wider than the cap (node widths plus gaps)
+into two adjacent layers — always legal: in-edges lengthen by one, out-
+edges keep their span; nodes with more outgoing than incoming edges move
+down so their edges stay short. Off by default; the sweet spot is a
+candidate-loop knob (~150 halves arch-state's width for a third more
+height; too low and the extra dummy columns win it back).
 **order** — ELK's layer sweep over port ranks without its randomness:
 a free layer sorts by the barycenter (integer ratio) of the port ranks it
 reaches in the fixed neighbour, its facing ports sort by those ranks, then
@@ -137,18 +146,39 @@ two-sided greedy switch polishes; then every port gets a border cell
 (`portCell`: spread over `1..w-2`, centre for one, cells shared when a
 side is over capacity — the router treats a shared cell as one trunk).
 Sub-steps are traced (`order · sweep 1.2 ↑ · 3 crossings`). **place** —
-Brandes–Köpf as ELK runs it, in integers: type-1 conflicts marked, four
-variants (upper/lower median neighbours × packed left/right), blocks made
+Brandes–Köpf as ELK runs it, in integers: type-1 conflicts marked, eight
+variants (upper/lower median neighbours × packed left/right × chains
+aligned or *free* — free cuts node↔dummy alignment so an edge chain no
+longer hangs on to its port: a fan out of a wide node packs at `edgeEdge`
+instead of reserving the node's width all the way down, paying with a
+bend in the channel; a port dummy always sticks to its member, else the
+frame's ports bunch up and the parent level pays), blocks made
 straight at the **port cells** (inside-block shift), compaction with the
 class-graph shift propagation (not the paper's `min` recurrence), the
-narrowest valid candidate kept (ELK's default with orthogonal routing —
-no balancing); `networkSimplex` builds ELK's auxiliary graph (one aux node
+narrowest valid candidate kept (a freed candidate can still route wider —
+the outer candidate loop will score the real render; no balancing).
+`compactTies` (set on the root level only — inner ties must stay stable
+or frame ports move and every parent candidate shifts) breaks equal-width
+ties by the rows' summed extents, preferring packed rows over ones
+stretched by blocks pinned apart. The remaining mid-row holes are not
+slack: they come from crossing-minimized orders like `[…, frame, chains,
+frame]` where the chains are pushed sideways by a *different* row —
+closing them means width-aware ordering, i.e. the candidate loop; `networkSimplex` builds ELK's auxiliary graph (one aux node
 per edge hanging below both ends, weights 4/8/32, in-layer chains with
 width + gap as minimum length) and solves it with the shared
 `simplex.ts` core, which the layering also uses (`nsSolve`: components,
 tight tree, cut values, pivots, normalize, optional balancing). Each
 candidate is traced (`place · upper medians, packed left · width 42`).
-**route** — ELK's orthogonal channel router in cells (ch. 5): per
+**route** — first *chain relaxation*: placement's dummy coordinates fix
+which gap an edge crosses per layer, not the exact column, so every chain
+slides within the slack its row neighbours leave (order and width are
+untouched) toward its end ports and takes the fewest columns its gap
+intervals allow (greedy stabbing, bend-minimal; passes repeat until no
+chain moves) — a staircase of one-column bends collapses to straight
+runs; port dummies join in as one-cell chains anchored on their single
+inner endpoint, so a frame's ports spread out over what they connect to
+instead of bunching at the border's left (their pinned order bounds the
+slide). Then ELK's orthogonal channel router in cells (ch. 5): per
 channel, a *trunk* per source cell (a fan-out bus; edges into one cell
 merge in its column instead — fusing by target too would join unrelated
 sources), stub → trunk row → stub; trunks with overlapping extents get a
@@ -158,53 +188,73 @@ both ways (the X) splits one trunk into two joined by a jog through a
 free column, as ELK does; greedy FAS over the dependencies, tracks by
 longest path, straight edges take no track; channel height = tracks + 2
 gap rows (one row when everything is straight, for the arrowhead); band
-tops follow; a dummy spans its band. **labels** is still a pass-through.
-Self-loops are skipped at import with a warning. Compounds run through
-every phase (next paragraph). `docs/elk-layered.md` ch. 8 lists what
-remains.
+tops follow; a dummy spans its band. Self-loops never enter the pipeline
+proper: both ends sit on the node's **east** side (every other phase
+skips them), placement's `gap` reserves two columns per loop east of the
+node, and routing draws the hook — out the border, around, back in one
+row higher; `A --> G` from inside G becomes a loop on the frame.
+**labels** is still a pass-through. `docs/elk-layered.md`
+ch. 8 lists what remains.
 
-Compound graphs (2026-08-30, superseding the dive's ch. 6/8
-recommendation): **one global layout**, Sander/dagre style — a frame is
-not a node but a set of `border` nodes in the flat graph, and every node
-carries its `parent`. Import creates a compound's top and bottom rows
-(1 unit high, `titleW + 2` wide so the title fits; an edge to a compound
-enters its top row, one from it leaves its bottom). Layering adds
-temporary nesting edges (top → member → bottom, top → child top, child
-bottom → bottom, weight 1 so the rows hug the members; an edge from a
-member up to its own frame's top row is reversed first) and removes them
-once layers exist. Split gives each dummy the innermost compound of
-either end whose layers cover it (else the common one), so a leaving edge
-stays inside down to the bottom row and pierces that, and then adds the
-left/right *columns*: a 1×0 border dummy at each end of the compound's
-block in every spanned layer, chained by `border` edges. Ordering sorts a
-layer as a tree of blocks (`sortBlock`: block barycenter = sum of the
-members', side dummies pinned at the ends, sibling blocks that continue
-into the fixed layer keep its order by merging violators — dagre's
-subgraph constraints — so side columns never cross; the greedy switch
-only swaps siblings). Placement treats border chains as inner segments
-that always win (two-tier conflict marking: everything crossing a border
-chain is marked first, so an edge entering a frame through its side bends
-and the frame stays straight; the NS placer weights them 64), with
-`framePad` on both sides of a border. Routing skips border edges; a
-frame whose title runs along the flow (`minSpan`, set by `layout()` for
-LR/RL from `titleW`) gets the missing rows added under its top row. The
-frame is the box of its borders (`frameOf`), returned in
-`LayoutResult.compounds`. What it looks like on the arch corpus: frames
-are consistent and nested, but every frame spans all layers between its
-first and last member, sibling frames with overlapping spans line up
-side by side, and other frames' edges route through frame interiors —
-`arch-system` is 731×162 cells against the recursive renderer's 312×182.
-A subgraph `direction` override is ignored for now.
+Compound graphs (2026-08-30): **recursive, ELK's way** — the global
+Sander/dagre scheme (frames as constraints on one layering) was built
+first and measured: correct, but a frame spans every layer between its
+first and last member, re-entrant paths force those spans, overlapping
+frames must sit side by side, and `arch-system` came out 731 columns
+wide against the old renderer's 312. Now `layout()` walks the compound
+tree: a compound's direct members, its child compounds (as nodes sized by
+their own result) and its *ports* form one flat graph per level, run
+through the same phases. An edge belongs to the level of its ends' lowest
+common compound; where it crosses a child's border it becomes a `port`
+dummy (1×0, `at: 'first'` for the top border, `'last'` for the bottom —
+layering gives them a rim layer of their own) inside, and a fixed-`pos`
+port on the child node outside (ordering keeps fixed sides in position
+order). Order of work per level: import, cycle breaking — that decides
+which border each crossing edge uses (into the child → top, out → bottom;
+a port edge is built in the edge's original orientation and turned, so
+`reversed` stays truthful) — then a provisional layers+split+order pass
+with the children as free-port placeholder boxes decides each child's
+*port order* (the parent owns it: the child's rim rows keep the given
+order — ordering never permutes a row of nothing but pinned ports — and
+the members inside follow; ports leading to the same inner item stay
+adjacent, groups in the outside's order — scattered same-target ports
+force the inside into contortions and leave relaxation no slack), then
+the children recurse, then the rest of the phases with their sizes and
+fixed port positions. Ports carry only their *order* through placement;
+the coordinate settles in routing's relaxation — within a level. Across
+levels it cannot: a child's height exists only once it is routed, so the
+parent reads finished port coordinates. Frame = inner extent + 2 columns + 2·framePad,
+at least `titleW + 2` wide (sideways: at least that tall — the title runs
+along the flow); the top/bottom rows *are* the port rows when there are
+ports, else one extra row. On the way up the child's geometry is offset
+into the frame and routes are joined at the port cells, so an input edge
+comes out as one polyline through every border it crosses. `until` stops
+every level at that phase; the lab gets each level's snapshots under its
+own group (`g1 · order · …`) and a final `labels · flat` picture of the
+whole hierarchy — emitted after the direction transform, in output
+orientation, layers ranked along the flow axis. A subgraph `direction` (down/right) is honoured for a
+*closed* frame (no crossing edge; proxy edges to the frame itself do not
+count) when the whole layout flows down or right: the scope is laid out
+in its own frame and transposed on the way out, leaf sizes and the
+spacing profile (`altSpacing`, the other axis's numbers) following the
+scope's parity. Corpus: `arch-system` 258×307 (old 312×182; `dfs` cycle
+breaking on the frame-level graph changes the reading order — a
+candidate-loop knob), `arch-state` 239×318 (old 378×432),
+`arch-classes` 316×104 (old 400×120). Not yet: ports avoiding the title
+cells.
 
 The bridge (`layout-engine.ts`) measures nodes from wrapped labels /
 compartments (no even-width forcing), turns `cardFrom`/`cardTo` into tail /
 head labels and the label into a center label, maps groups to compounds
-(`g<i>`, title width from the fitted label; a node standing in for a
-subgraph is dropped and its edges attach to the compound), passes
+(`g<i>`, title width from the fitted label, `dir` passed through; a node
+standing in for a subgraph is dropped and its edges attach to the
+compound), passes
 per-direction cell spacings (cross axis: 3/1/1 columns + 1 frame pad for
-TB, 1/0/0 rows + 0 for LR), and paints the result: frames first as a
-perimeter of border bits (no occupancy — boxes and edges lie inside) with
-the nesting depth over the rect, then `drawBox` / `drawClassBox`,
+TB — an `edgeEdge` of 0 was tried and reverted: `││` bundles render
+unambiguously but read too dense — 1/0/0 rows + 0 for LR), and paints the result: frames first as a
+perimeter of border bits (no occupancy — boxes and edges lie inside; an
+edge crossing a border shows as `┼`) with the nesting depth over the
+rect, then `drawBox` / `drawClassBox`,
 `segH`/`segV`, `junction` for the border tee at each port cell, heads in
 the cell before the port, `drawTextOverEdges` for labels and, last, frame
 titles over whatever pierces the top row.

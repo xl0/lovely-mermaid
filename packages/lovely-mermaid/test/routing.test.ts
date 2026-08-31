@@ -23,6 +23,7 @@ const routeOf = (g: LGraph, id: string): Pt[] => joinRoutes(g).get(id) as Pt[]
 function wellFormed(g: LGraph): void {
   const height = Math.max(...g.nodes.map((n) => n.y + Math.max(1, n.h)))
   for (const e of g.edges) {
+    if (e.src.node === e.dst.node) continue
     const r = e.route as Pt[]
     expect(r.length).toBeGreaterThanOrEqual(2)
     expect(r[0]).toEqual([
@@ -81,6 +82,60 @@ function noOverlap(g: LGraph): void {
 }
 
 describe('routing', () => {
+  test('self-loops hang off the east border on reserved columns', () => {
+    const g = routed(['A>A', 'A>B', 'C>B', 'A>A'])
+    const A = g.nodes.find((n) => n.id === 'A') as LGraph['nodes'][number]
+    const C = g.nodes.find((n) => n.id === 'C') as LGraph['nodes'][number]
+    const loops = g.edges.filter((e) => e.src.node === e.dst.node)
+    expect(loops.length).toBe(2)
+    const routes = loops.map((e) => e.route as Pt[])
+    // both loop around the east border, the second two columns further out
+    for (const r of routes) {
+      expect(r[0][0]).toBe(A.x + A.w - 1)
+      expect(r[1][1]).toBe(r[0][1])
+      expect(r[2][1]).toBe(r[3][1])
+    }
+    const outs = routes.map((r) => r[1][0]).sort((a, b) => a - b)
+    expect(outs).toEqual([A.x + A.w + 1, A.x + A.w + 3])
+    // the neighbour keeps clear of the reserved columns
+    if (C.layer === A.layer && C.x > A.x) expect(C.x).toBeGreaterThan(A.x + A.w + 4)
+    wellFormed(g)
+  })
+
+  test('relaxation: an unobstructed chain drops dead straight from its port', () => {
+    const g = routed(['A>Z:3'])
+    const chain = g.nodes.filter((n) => n.kind === 'dummy')
+    expect(chain.length).toBe(2)
+    const e = g.edges.find((x) => x.id === 'e0') as LGraph['edges'][number]
+    for (const d of chain) expect(d.x).toBe(e.src.node.x + e.src.pos)
+    expect(new Set(routeOf(g, 'e0').map(([x]) => x)).size).toBe(1)
+    wellFormed(g)
+  })
+
+  test('relaxation: an obstructed chain takes one column, nearest the port its gaps allow', () => {
+    const g = routed(['A>B', 'B>C', 'C>D', 'A>D:3', 'A(7)', 'B(3)', 'C(3)'])
+    const chain = g.nodes.filter((n) => n.kind === 'dummy' && n.origin === 'e3')
+    expect(chain.length).toBe(2)
+    expect(new Set(chain.map((n) => n.x)).size).toBe(1)
+    // one jog at most between the port column and the chain column
+    expect(new Set(routeOf(g, 'e3').map(([x]) => x)).size).toBeLessThanOrEqual(2)
+    wellFormed(g)
+  })
+
+  test('relaxation: an over-constrained chain stays inside its gaps', () => {
+    // wide nodes on both sides leave the middle chain no slack anywhere
+    const g = routed(['L1>L2', 'L2>L3', 'R1>R2', 'R2>R3', 'A>Z:3', 'L1', 'R1', 'A', 'Z'])
+    for (const n of g.nodes) {
+      if (n.kind !== 'dummy') continue
+      const row = g.layers[n.layer]
+      const a = row[n.order - 1]
+      const b = row[n.order + 1]
+      if (a !== undefined) expect(n.x).toBeGreaterThanOrEqual(a.x + a.w + 1)
+      if (b !== undefined) expect(n.x).toBeLessThanOrEqual(b.x - 2)
+    }
+    wellFormed(g)
+  })
+
   test('a straight chain needs one row per channel, without touching its input', () => {
     const g = pure(placed(['A>B', 'B>C']), (g) => routeEdges(g, {}))
     const ys = Object.fromEntries(g.nodes.map((n) => [n.id, n.y]))

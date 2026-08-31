@@ -17,19 +17,26 @@
  * through a free column. Remaining cycles are broken greedily, tracks are
  * longest paths over the dependencies, straight edges take no track.
  *
- * A compound frame whose title runs along the flow axis (`minSpan`) gets
- * the missing rows added to the channel under its top row.
+ * Before any of that, the long-edge chains are *relaxed*: placement's
+ * dummy coordinates fix which gap an edge crosses in each layer, not the
+ * exact column, so each chain slides within the slack its neighbours
+ * leave and takes the fewest columns its gaps allow. Port dummies join
+ * in as one-cell chains anchored on their single inner endpoint, so a
+ * frame's ports spread out over what they connect to instead of bunching
+ * at the border's left — their pinned order is slack's boundary.
  *
  * Phase 6, labels, is still a pass-through. `joinRoutes` is plumbing.
  */
 import type { LEdge, LGraph, LNode, LPort } from './graph.ts'
-import { borderNode, cloneGraph } from './graph.ts'
+import { cloneGraph } from './graph.ts'
+import { gap } from './placement.ts'
 import type { LabelOptions, Pt, RoutingOptions } from './types.ts'
 
 export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
   const g = cloneGraph(g0)
   const L = g.layers.length
   if (L === 0) return g
+  relaxChains(g)
   const gapRows = Math.max(1, g.spacing.channelGap)
   const bandH = g.layers.map((row) => Math.max(1, ...row.map((n) => n.h)))
   const col = (p: LPort): number => p.node.x + p.pos
@@ -39,42 +46,27 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
   for (let l = 0; l + 1 < L; l++) {
     const segs: LEdge[] = []
     for (const n of g.layers[l]) {
-      for (const p of n.ports) for (const e of p.out) if (e.border !== true) segs.push(e)
+      for (const p of n.ports) for (const e of p.out) if (e.dst.node !== n) segs.push(e)
     }
     channels.push(routeChannel(segs, col, g.warnings))
   }
   // Band tops from the track counts; nodes sit at the top of their band.
-  // `extra[l]` rows widen the channel under layer l for a frame's minSpan.
-  const extra = new Int32Array(L)
-  const place = (): void => {
-    let y = 0
-    for (let l = 0; l < L; l++) {
-      for (const n of g.layers[l]) n.y = y
-      y += bandH[l]
-      if (l + 1 < L) {
-        const ch = channels[l]
-        ch.first = y + gapRows + extra[l]
-        y += (ch.tracks === 0 ? 1 : ch.tracks + 2 * gapRows) + extra[l]
-      }
+  const top: number[] = []
+  let y = 0
+  for (let l = 0; l < L; l++) {
+    top.push(y)
+    for (const n of g.layers[l]) n.y = y
+    y += bandH[l]
+    if (l + 1 < L) {
+      const ch = channels[l]
+      ch.first = y + gapRows
+      y += ch.tracks === 0 ? 1 : ch.tracks + 2 * gapRows
     }
   }
-  place()
-  // lowest frames first: rows added under a top row never shorten a frame
-  // whose top row lies below it
-  const frames = g.compounds
-    .map((c) => ({ c, top: borderNode(g, c.id, 'top'), bottom: borderNode(g, c.id, 'bottom') }))
-    .sort((a, b) => b.top.layer - a.top.layer)
-  for (const { c, top, bottom } of frames) {
-    const short = c.minSpan - (bottom.y - top.y + 1)
-    if (short > 0 && top.layer + 1 < L) {
-      extra[top.layer] += short
-      place()
-    }
-  }
-  // Pass 2: routes. A dummy is one cell at the top of its band, so the
-  // segment leaving it starts there and runs down through the band.
+  // Pass 2: routes. A dummy or port is one cell at the top of its band, so
+  // the segment leaving it starts there and runs down through the band.
   const portRow = (p: LPort): number =>
-    p.side === 'N' || p.node.kind === 'dummy' ? p.node.y : p.node.y + p.node.h - 1
+    p.side === 'N' || p.node.kind !== 'node' ? p.node.y : p.node.y + p.node.h - 1
   for (let l = 0; l + 1 < L; l++) {
     const ch = channels[l]
     for (const [e, path] of ch.paths) {
@@ -91,7 +83,103 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
       e.route = dedupe(pts)
     }
   }
+  // Self-loops: out of the east border, around, back in — the k-th loop of
+  // a node two columns further out, one row higher, on the space `gap`
+  // reserved for it. The arrow lands on the upper row.
+  for (const n of g.nodes) {
+    let k = 0
+    for (const p of n.ports) {
+      for (const e of p.out) {
+        if (e.dst.node !== n) continue
+        const r1 = n.y + n.h - 1 - k
+        const r2 = r1 - 1
+        if (r2 < n.y) {
+          g.warnings.push(`edge "${e.id}": no room for another self-loop on "${n.id}"`)
+          k++
+          continue
+        }
+        const border = n.x + n.w - 1
+        const out = border + 2 * (k + 1)
+        e.src.pos = r1 - n.y
+        e.dst.pos = r2 - n.y
+        e.route = [
+          [border, r1],
+          [out, r1],
+          [out, r2],
+          [border, r2],
+        ]
+        k++
+      }
+    }
+  }
   return g
+}
+
+/**
+ * Slide every long-edge chain within the slack its row neighbours leave —
+ * order and width never change — so it runs straight under its source
+ * port where the gaps allow, bends only where an interval runs out
+ * (greedy stabbing is bend-minimal), and heads for its target port after
+ * a bend. Chains block each other, so the sweep repeats until nothing
+ * moves (a few passes; capped).
+ */
+function relaxChains(g: LGraph): void {
+  const W = Math.max(...g.nodes.map((n) => n.x + Math.max(1, n.w)))
+  const chains = new Map<string, LNode[]>()
+  for (const n of g.nodes) {
+    if (n.kind === 'port') chains.set(n.id, [n])
+    if (n.kind !== 'dummy') continue
+    const list = chains.get(n.origin as string)
+    if (list === undefined) chains.set(n.origin as string, [n])
+    else list.push(n)
+  }
+  const keys = [...chains.keys()].sort()
+  for (const ds of chains.values()) ds.sort((a, b) => a.layer - b.layer)
+  /** `primary` if the window allows it, else `secondary`, else the near edge. */
+  const pick = (lo: number, hi: number, primary: number, secondary: number): number => {
+    if (primary >= lo && primary <= hi) return primary
+    if (secondary >= lo && secondary <= hi) return secondary
+    return Math.max(lo, Math.min(hi, primary))
+  }
+  for (let pass = 0; pass < 10; pass++) {
+    let moved = false
+    for (const key of keys) {
+      const ds = chains.get(key) as LNode[]
+      const head = ds[0].ports.find((p) => p.side === 'N')?.in[0]
+      const tail = ds[ds.length - 1].ports.find((p) => p.side === 'S')?.out[0]
+      const headCol = head === undefined ? undefined : head.src.node.x + head.src.pos
+      const tailCol = tail === undefined ? undefined : tail.dst.node.x + tail.dst.pos
+      const srcCol = headCol ?? tailCol ?? ds[0].x
+      const dstCol = tailCol ?? headCol ?? ds[ds.length - 1].x
+      const iv = ds.map((d): [number, number] => {
+        const row = g.layers[d.layer]
+        const a = row[d.order - 1]
+        const b = row[d.order + 1]
+        const lo = a === undefined ? 0 : a.x + a.w + gap(g.spacing, a, d)
+        const hi = b === undefined ? W - 1 : b.x - gap(g.spacing, d, b) - 1
+        return lo > hi ? [d.x, d.x] : [lo, hi]
+      })
+      let k = 0
+      let target = srcCol
+      while (k < ds.length) {
+        let [lo, hi] = iv[k]
+        let end = k + 1
+        while (end < ds.length && Math.max(lo, iv[end][0]) <= Math.min(hi, iv[end][1])) {
+          lo = Math.max(lo, iv[end][0])
+          hi = Math.min(hi, iv[end][1])
+          end++
+        }
+        const x = pick(lo, hi, target, end === ds.length ? dstCol : srcCol)
+        for (let j = k; j < end; j++) {
+          if (ds[j].x !== x) moved = true
+          ds[j].x = x
+        }
+        target = dstCol
+        k = end
+      }
+    }
+    if (!moved) break
+  }
 }
 
 function dedupe(pts: Pt[]): Pt[] {

@@ -1,6 +1,7 @@
 import { expect } from 'bun:test'
 import type { LGraph } from '../src/engine/graph.ts'
 import { buildGraph, toSnapshot } from '../src/engine/graph.ts'
+import type { LayoutInput } from '../src/engine/types.ts'
 
 export const spacing = { nodeNode: 3, nodeEdge: 1, edgeEdge: 1, channelGap: 1, framePad: 1 }
 
@@ -12,7 +13,7 @@ export const spacing = { nodeNode: 3, nodeEdge: 1, edgeEdge: 1, channelGap: 1, f
  * ids, or other compound ids for nesting; an edge end naming a compound
  * attaches to the compound.
  */
-export function graph(items: string[], groups: Record<string, string[]> = {}): LGraph {
+export function inputOf(items: string[], groups: Record<string, string[]> = {}): LayoutInput {
   const strip = (e: string): string => e.replace(/[:*]\d+/g, '').replace(/\(\d+\)/g, '')
   const widths = new Map<string, number>()
   for (const m of items.join(' ').matchAll(/(\w+)\((\d+)\)/g)) widths.set(m[1], Number(m[2]))
@@ -22,7 +23,7 @@ export function graph(items: string[], groups: Record<string, string[]> = {}): L
     ...new Set([...items.flatMap((e) => strip(e).split('>')), ...Object.values(groups).flat()]),
   ].filter((id) => !(id in groups))
   const edges = items.filter((e) => e.includes('>'))
-  const g = buildGraph({
+  return {
     dir: 'down',
     spacing,
     nodes: ids.map((id) => ({ id, w: widths.get(id) ?? 5, h: 3, parent: parent.get(id) })),
@@ -31,7 +32,13 @@ export function graph(items: string[], groups: Record<string, string[]> = {}): L
       return { id: `e${i}`, from, to }
     }),
     compounds: Object.keys(groups).map((id) => ({ id, parent: parent.get(id), titleW: 3 })),
-  })
+  }
+}
+
+/** `inputOf` as one level's working graph (compounds ignored). */
+export function graph(items: string[]): LGraph {
+  const edges = items.filter((e) => e.includes('>'))
+  const g = buildGraph(inputOf(items))
   edges.forEach((e, i) => {
     g.edges[i].minLen = Number(e.match(/:(\d+)/)?.[1] ?? 1)
     g.edges[i].weight = Number(e.match(/\*(\d+)/)?.[1] ?? 1)

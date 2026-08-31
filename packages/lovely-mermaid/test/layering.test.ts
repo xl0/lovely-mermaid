@@ -13,6 +13,32 @@ const cost = (g: LGraph): number =>
 const both: LayeringOptions[] = [{ strategy: 'longestPath' }, { strategy: 'networkSimplex' }]
 
 describe('layering', () => {
+  test('maxWidth staggers an overwide row and keeps every edge pointing down', () => {
+    const items = ['R>A', 'R>B', 'R>C', 'R>D', 'A(20)', 'B(20)', 'C(20)', 'D(20)']
+    const plain = assignLayers(graph(items), {})
+    expect(plain.layers.length).toBe(2)
+    const g = assignLayers(graph(items), { maxWidth: 50 })
+    expect(g.layers.length).toBe(3)
+    const width = (row: (typeof g.layers)[number]): number =>
+      row.reduce((t, n) => t + n.w, 0) + 3 * (row.length - 1)
+    for (const row of g.layers) expect(width(row)).toBeLessThanOrEqual(50)
+    for (const e of g.edges) {
+      expect(e.dst.node.layer - e.src.node.layer).toBeGreaterThanOrEqual(e.minLen)
+    }
+  })
+
+  test('maxWidth prefers to move nodes whose edges go on down', () => {
+    // E and F continue downward; A and B are sinks — E and F should move,
+    // keeping their out-edges short
+    const g = assignLayers(
+      graph(['R>A', 'R>B', 'R>E', 'R>F', 'E>Z', 'F>Z', 'A(18)', 'B(18)', 'E(18)', 'F(18)']),
+      { maxWidth: 45 },
+    )
+    const E = g.nodes.find((n) => n.id === 'E') as (typeof g.nodes)[number]
+    const A = g.nodes.find((n) => n.id === 'A') as (typeof g.nodes)[number]
+    expect(E.layer).toBe(A.layer + 1)
+  })
+
   test('chains and diamonds, without touching the input', () => {
     for (const opts of both) {
       const g = pure(graph(['A>B', 'B>C', 'A>C', 'C>D']), (g) => assignLayers(g, opts))

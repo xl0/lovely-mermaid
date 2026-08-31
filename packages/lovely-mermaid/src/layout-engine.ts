@@ -65,6 +65,7 @@ export function importGraph(graph: Graph): { input: LayoutInput; lines: string[]
     label: g.label,
     parent: group(g.parent),
     titleW: g.label === '' ? 0 : stringWidth(frameTitle(g.label, WRAP_WIDTH + 4)),
+    dir: g.dir,
   }))
   // a node whose id is a subgraph's stands in for that subgraph
   const proxy = new Map<number, string>()
@@ -103,8 +104,16 @@ export function importGraph(graph: Graph): { input: LayoutInput; lines: string[]
     const end = (n: number): string => proxy.get(n) ?? `n${n}`
     return { id: `e${i}`, from: end(e.from), to: end(e.to), labels }
   })
+  const alt = graph.dir === 'right' || graph.dir === 'left' ? SPACING.down : SPACING.right
   return {
-    input: { dir: graph.dir, nodes, edges, compounds, spacing: SPACING[graph.dir] },
+    input: {
+      dir: graph.dir,
+      nodes,
+      edges,
+      compounds,
+      spacing: SPACING[graph.dir],
+      altSpacing: alt,
+    },
     lines,
   }
 }

@@ -12,16 +12,14 @@
  * replace ELK's random restarts, and the declaration order is always
  * variant one so an already-minimal input stays as written. A two-sided
  * greedy switch polishes the result. Barycenters are integer ratios.
- *
- * Compounds stay contiguous: a layer is sorted as a tree of blocks, a
- * block's barycenter being the weighted mean of its members' (dagre's
- * `sortSubgraph`), its left and right border dummies pinned at its ends,
- * sibling blocks kept in the order of the layer just sorted so their side
- * columns never cross, and the greedy switch only swaps siblings.
+ * A side with fixed ports (a compound's, set by its own layout) keeps
+ * them in position order; only free ports get cells. A row of nothing
+ * but rim-pinned nodes (a frame's ports, in the order the parent asked
+ * for) is never permuted; everything else sorts against it.
  */
 
 import type { LGraph, LNode, LPort } from './graph.ts'
-import { ancestors, cloneGraph } from './graph.ts'
+import { cloneGraph } from './graph.ts'
 import type { OrderingOptions } from './types.ts'
 
 /** Sub-step reporting: the graph with the current order written in. */
@@ -32,11 +30,7 @@ interface State {
   layers: LNode[][]
   north: Map<LNode, LPort[]>
   south: Map<LNode, LPort[]>
-  /** each node's compounds, outermost first; shared, never changes */
-  chains: Map<LNode, string[]>
 }
-
-const isSide = (n: LNode): boolean => n.border === 'left' || n.border === 'right'
 
 type Ratio = [number, number]
 const cmp = (a: Ratio, b: Ratio): number => a[0] * b[1] - b[0] * a[1]
@@ -44,25 +38,19 @@ const mid = (a: Ratio, b: Ratio): Ratio => [a[0] * b[1] + b[0] * a[1], 2 * a[1] 
 
 export function orderNodes(g0: LGraph, opts: OrderingOptions, trace?: OrderTrace): LGraph {
   const g = cloneGraph(g0)
-  for (const n of g.nodes) for (const p of n.ports) p.side = p.out.length > 0 ? 'S' : 'N'
-  if (g.layers.length === 0) return g
-  const chains = new Map(g.nodes.map((n) => [n, ancestors(g, n)]))
-  // gathered into blocks, in an order consistent from layer to layer,
-  // otherwise as declared
-  const initial = (): State => {
-    const layers: LNode[][] = []
-    for (const row of g.layers) {
-      const above = layers[layers.length - 1]
-      const fixed = above === undefined ? new Map<string, number>() : blockStarts(above, chains)
-      layers.push(sortBlock(row, new Map(), chains, 0, fixed))
-    }
-    return {
-      layers,
-      north: new Map(g.nodes.map((n) => [n, n.ports.filter((p) => p.side === 'N')])),
-      south: new Map(g.nodes.map((n) => [n, n.ports.filter((p) => p.side === 'S')])),
-      chains,
+  for (const n of g.nodes) {
+    for (const p of n.ports) {
+      const e = p.in[0] ?? p.out[0]
+      if (e !== undefined && e.src.node === e.dst.node) continue // self-loops keep their east side
+      p.side = p.out.length > 0 ? 'S' : 'N'
     }
   }
+  if (g.layers.length === 0) return g
+  const initial = (): State => ({
+    layers: g.layers.map((row) => [...row]),
+    north: new Map(g.nodes.map((n) => [n, byPos(n.ports.filter((p) => p.side === 'N'))])),
+    south: new Map(g.nodes.map((n) => [n, byPos(n.ports.filter((p) => p.side === 'S'))])),
+  })
   let best = initial()
   if ((opts.strategy ?? 'sweep') === 'sweep') {
     let bestCount = countCrossings(best)
@@ -74,7 +62,7 @@ export function orderNodes(g0: LGraph, opts: OrderingOptions, trace?: OrderTrace
     ].slice(0, Math.max(1, Math.min(4, opts.thoroughness ?? 4)))
     variants.forEach((v, k) => {
       const s = initial()
-      if (v.reverse) for (const row of s.layers) row.reverse()
+      if (v.reverse) for (const row of s.layers) if (!pinnedRow(row)) row.reverse()
       let count = countCrossings(s)
       let down = v.down
       for (let sweepNo = 1; ; sweepNo++) {
@@ -109,6 +97,9 @@ export function orderNodes(g0: LGraph, opts: OrderingOptions, trace?: OrderTrace
   return g
 }
 
+/** A row that keeps its given order: nothing in it but rim-pinned ports. */
+const pinnedRow = (row: LNode[]): boolean => row.length > 0 && row.every((n) => n.at !== undefined)
+
 /** One pass over all layers, each sorted against the neighbour already passed. */
 function sweep(s: State, down: boolean): void {
   const L = s.layers.length
@@ -123,6 +114,10 @@ function step(s: State, free: number, fixed: number): void {
   const facingFixed = (n: LNode): LPort[] => (down ? s.south : s.north).get(n) as LPort[]
   const facingFree = (n: LNode): LPort[] => (down ? s.north : s.south).get(n) as LPort[]
   const partner = (p: LPort): LPort | undefined => (down ? p.in[0]?.src : p.out[0]?.dst)
+  if (pinnedRow(s.layers[free])) {
+    sortPorts(s, free, fixed)
+    return
+  }
   const rank = new Map<LPort, number>()
   let r = 0
   for (const n of s.layers[fixed]) for (const p of facingFixed(n)) rank.set(p, ++r)
@@ -140,13 +135,7 @@ function step(s: State, free: number, fixed: number): void {
     }
     if (count > 0) bary.set(n, [sum, count])
   }
-  s.layers[free] = sortBlock(
-    s.layers[free],
-    bary,
-    s.chains,
-    0,
-    blockStarts(s.layers[fixed], s.chains),
-  )
+  sortByBarycenter(s.layers[free], bary)
   sortPorts(s, free, fixed)
 }
 
@@ -165,7 +154,7 @@ function sortPorts(s: State, free: number, fixed: number): void {
     const q = partner(p)
     return q === undefined ? 0 : (rank.get(q) ?? 0)
   }
-  for (const n of s.layers[free]) facingFree(n).sort((a, b) => key(a) - key(b))
+  for (const n of s.layers[free]) sortSide(facingFree(n), key)
   const pos = new Map<LPort, number>()
   let q = 0
   for (const n of s.layers[free]) for (const p of facingFree(n)) pos.set(p, ++q)
@@ -173,7 +162,17 @@ function sortPorts(s: State, free: number, fixed: number): void {
     const t = partnerBack(p)
     return t === undefined ? 0 : (pos.get(t) ?? 0)
   }
-  for (const n of s.layers[fixed]) facingFixed(n).sort((a, b) => back(a) - back(b))
+  for (const n of s.layers[fixed]) sortSide(facingFixed(n), back)
+}
+
+/** Sort a side's ports by `key`, unless any is fixed: then by position. */
+function sortSide(ps: LPort[], key: (p: LPort) => number): void {
+  if (ps.some((p) => p.fixed === true)) byPos(ps)
+  else ps.sort((a, b) => key(a) - key(b))
+}
+function byPos(ps: LPort[]): LPort[] {
+  if (ps.some((p) => p.fixed === true)) ps.sort((a, b) => a.pos - b.pos)
+  return ps
 }
 
 /** Every layer's ports against both neighbours, node order unchanged. */
@@ -183,130 +182,34 @@ function sortAllPorts(s: State): void {
   for (let i = L - 2; i >= 0; i--) sortPorts(s, i, i + 1)
 }
 
-/** Where each compound's block starts in a row, by first occurrence. */
-function blockStarts(row: LNode[], chains: Map<LNode, string[]>): Map<string, number> {
-  const pos = new Map<string, number>()
-  row.forEach((n, i) => {
-    for (const c of chains.get(n) as string[]) if (!pos.has(c)) pos.set(c, i)
-  })
-  return pos
-}
-
-interface Item {
-  /** a compound at this depth, or `null` for a single node */
-  key: string | null
-  nodes: LNode[]
-}
-/** A sortable unit: items merged by constraints, their combined barycenter. */
-interface Entry {
-  items: Item[]
-  b: Ratio | null
-  /** block start in the fixed layer of the first constrained compound, else -1 */
-  pos: number
-}
-
 /**
- * Stable sort of a layer's items at one nesting depth — nodes not in a
- * deeper compound, and one block per compound at that depth, gathered in
- * first-occurrence order and sorted recursively. A block's barycenter is
- * the sum over its members'; an item without one takes the midpoint of its
+ * Stable sort by barycenter; a node without one takes the midpoint of its
  * known neighbours in the current order, so it keeps its place (ELK's
  * fill-in rule). Nothing known → nothing moves.
- *
- * Two compounds that both continue into the fixed layer keep the order
- * they have there (`fixed`, dagre's subgraph constraints), so their side
- * columns never cross: a pair whose barycenters disagree is merged into one
- * unit in the constrained order (dagre's `resolveConflicts`).
  */
-function sortBlock(
-  nodes: LNode[],
-  bary: Map<LNode, Ratio>,
-  chains: Map<LNode, string[]>,
-  depth: number,
-  fixed: Map<string, number>,
-): LNode[] {
-  const items: Item[] = []
-  const at = new Map<string, number>()
-  for (const n of nodes) {
-    const c = (chains.get(n) as string[])[depth]
-    if (c === undefined) items.push({ key: null, nodes: [n] })
-    else {
-      const i = at.get(c)
-      if (i === undefined) {
-        at.set(c, items.length)
-        items.push({ key: c, nodes: [n] })
-      } else items[i].nodes.push(n)
-    }
-  }
-  const entries: Entry[] = items.map((it) => {
-    let sum = 0
-    let count = 0
-    for (const n of it.nodes) {
-      const b = bary.get(n)
-      if (b === undefined) continue
-      sum += b[0]
-      count += b[1]
-    }
-    return { items: [it], b: count > 0 ? [sum, count] : null, pos: fixed.get(it.key ?? '') ?? -1 }
-  })
-  // constraints: any two constrained entries whose barycenters would put
-  // them the other way round (or say nothing) become one unit
-  for (let merged = true; merged; ) {
-    merged = false
-    for (let i = 0; i < entries.length && !merged; i++) {
-      for (let j = 0; j < entries.length && !merged; j++) {
-        const u = entries[i]
-        const v = entries[j]
-        if (u.pos < 0 || v.pos < 0 || u.pos >= v.pos) continue
-        if (u.b !== null && v.b !== null && cmp(u.b, v.b) < 0) continue
-        const b: Ratio | null =
-          u.b === null ? v.b : v.b === null ? u.b : [u.b[0] + v.b[0], u.b[1] + v.b[1]]
-        entries.splice(Math.max(i, j), 1)
-        entries.splice(Math.min(i, j), 1, { items: [...u.items, ...v.items], b, pos: u.pos })
-        merged = true
-      }
-    }
-  }
-  const keys = new Map<Entry, Ratio>()
+function sortByBarycenter(row: LNode[], bary: Map<LNode, Ratio>): void {
+  const keys = new Map<LNode, Ratio>()
   let prev: Ratio | null = null
-  for (let i = 0; i < entries.length; i++) {
-    if (entries[i].b !== null) {
-      keys.set(entries[i], entries[i].b as Ratio)
-      prev = entries[i].b
+  for (let i = 0; i < row.length; i++) {
+    const b = bary.get(row[i])
+    if (b !== undefined) {
+      keys.set(row[i], b)
+      prev = b
       continue
     }
     let next: Ratio | null = null
-    for (let j = i + 1; j < entries.length && next === null; j++) next = entries[j].b
+    for (let j = i + 1; j < row.length && next === null; j++) next = bary.get(row[j]) ?? null
     const k = prev !== null && next !== null ? mid(prev, next) : (prev ?? next)
-    if (k !== null) keys.set(entries[i], k)
+    if (k !== null) keys.set(row[i], k)
   }
-  if (keys.size === entries.length) {
-    entries.sort((a, b) => cmp(keys.get(a) as Ratio, keys.get(b) as Ratio))
-  }
-  return entries.flatMap((e) =>
-    e.items.flatMap((it) => {
-      if (it.key === null) return it.nodes
-      const sides = it.nodes.filter((n) => isSide(n) && n.origin === it.key)
-      const inner = sortBlock(
-        it.nodes.filter((n) => !sides.includes(n)),
-        bary,
-        chains,
-        depth + 1,
-        fixed,
-      )
-      return [
-        ...sides.filter((n) => n.border === 'left'),
-        ...inner,
-        ...sides.filter((n) => n.border === 'right'),
-      ]
-    }),
-  )
+  if (keys.size < row.length) return
+  row.sort((a, b) => cmp(keys.get(a) as Ratio, keys.get(b) as Ratio))
 }
 
 /**
  * Adjacent swaps within a layer while they cut the crossings against both
  * neighbouring layers. Every accepted swap strictly reduces the total, so
- * it terminates; deterministic. Only siblings swap, so blocks stay whole.
+ * it terminates; deterministic.
  */
 function greedySwitch(s: State): void {
   const L = s.layers.length
@@ -317,9 +220,8 @@ function greedySwitch(s: State): void {
     improved = false
     for (let i = 0; i < L; i++) {
       const row = s.layers[i]
+      if (pinnedRow(row)) continue
       for (let k = 0; k + 1 < row.length; k++) {
-        if (row[k].parent !== row[k + 1].parent) continue
-        if (isSide(row[k]) || isSide(row[k + 1])) continue
         const before = local(i)
         ;[row[k], row[k + 1]] = [row[k + 1], row[k]]
         if (local(i) < before) improved = true
@@ -334,7 +236,6 @@ function copyState(s: State): State {
     layers: s.layers.map((row) => [...row]),
     north: new Map([...s.north].map(([n, ps]) => [n, [...ps]])),
     south: new Map([...s.south].map(([n, ps]) => [n, [...ps]])),
-    chains: s.chains,
   }
 }
 function restore(s: State, from: State): void {
@@ -347,17 +248,21 @@ function restore(s: State, from: State): void {
  * the border cell of every port. */
 function apply(g: LGraph, s: State): void {
   g.layers = s.layers.map((row) => [...row])
-  for (const row of g.layers) row.forEach((n, i) => void (n.order = i))
+  for (const row of g.layers) {
+    row.forEach((n, i) => {
+      n.order = i
+    })
+  }
   for (const n of g.nodes) {
     const north = s.north.get(n) as LPort[]
     const south = s.south.get(n) as LPort[]
     for (const side of [north, south]) {
       side.forEach((p, i) => {
         p.order = i
-        p.pos = portCell(n, i, side.length)
+        if (p.fixed !== true) p.pos = portCell(n, i, side.length)
       })
     }
-    n.ports = [...north, ...south]
+    n.ports = [...north, ...south, ...n.ports.filter((p) => p.side === 'E' || p.side === 'W')]
   }
 }
 
@@ -367,10 +272,10 @@ function apply(g: LGraph, s: State): void {
  * takes the middle cell of its slice, rounding toward the start — so a
  * single port sits on the top-biased centre and several spread evenly.
  * More ports than cells share cells; the router treats a shared cell as
- * one trunk. Dummies and other one-cell nodes: their one cell.
+ * one trunk. Dummies, ports and other one-cell nodes: their one cell.
  */
 export function portCell(n: LNode, i: number, k: number): number {
-  if (n.kind === 'dummy' || n.w <= 1) return 0
+  if (n.kind !== 'node' || n.w <= 1) return 0
   const usable = Math.max(1, n.w - 2)
   return 1 + Math.floor(((2 * i + 1) * usable - 1) / (2 * k))
 }
@@ -418,6 +323,5 @@ export function crossingsOf(g: LGraph): number {
     layers: g.layers,
     north: new Map(g.nodes.map((n) => [n, n.ports.filter((p) => p.side === 'N')])),
     south: new Map(g.nodes.map((n) => [n, n.ports.filter((p) => p.side === 'S')])),
-    chains: new Map(),
   })
 }

@@ -3,17 +3,13 @@
  * sequence, ELK's LGraph in spirit. Every edge end is a port; long-edge
  * dummies are real nodes with real ports; a reversed edge is stored in
  * layout direction with a flag. `-1` means "not assigned yet" for layer,
- * order and coordinates, so a snapshot can leave the field out.
- *
- * Compounds (subgraphs) are not nodes. Each one is a set of *border* nodes
- * in the same flat graph: a top and a bottom row created here, which
- * layering pins around the members with nesting edges, and left / right
- * columns per spanned layer that placement adds and keeps straight. Every
- * node knows its `parent` compound; ordering keeps a compound's nodes
- * contiguous in each layer. The frame is the box of its border nodes.
+ * order and coordinates, so a snapshot can leave the field out. A graph
+ * is one hierarchy level: a compound is a node here (sized by its own
+ * layout) whose ports are fixed, and inside the compound the same edges
+ * end at `port` dummies on the first / last layer.
  */
 import type { SEdge, SNode, Snapshot, SPort } from './snapshot.ts'
-import type { InputLabel, LayoutInput, PlacedLabel, Pt, Rect, Spacing } from './types.ts'
+import type { InputLabel, LayoutInput, PlacedLabel, Pt, Spacing } from './types.ts'
 
 export type Side = 'N' | 'S' | 'E' | 'W'
 
@@ -25,6 +21,8 @@ export interface LPort {
   order: number
   /** border cell offset along the side */
   pos: number
+  /** `pos` was set by the compound's own layout; ordering keeps it */
+  fixed?: boolean
   in: LEdge[]
   out: LEdge[]
 }
@@ -32,13 +30,14 @@ export interface LPort {
 export interface LNode {
   id: string
   label?: string
-  /** `border`: one of a frame's four sides, see the module comment */
-  kind: 'node' | 'dummy' | 'border'
-  /** dummy: the input edge it stands in for; border: its compound */
+  /** `port`: where an edge crosses this level's frame, a 1×0 cell */
+  kind: 'node' | 'dummy' | 'port'
+  /** dummy: the input edge it stands in for */
   origin?: string
-  border?: 'top' | 'bottom' | 'left' | 'right'
-  /** the compound this node lies in (a border node: its own compound) */
-  parent?: string
+  /** pinned to the first / last layer (a port on the frame's top / bottom) */
+  at?: 'first' | 'last'
+  /** number of self-loops, each reserving two columns to the east */
+  loops?: number
   w: number
   h: number
   layer: number
@@ -60,8 +59,6 @@ export interface LEdge {
   /** layering: cost per unit of length, and the least length allowed */
   weight: number
   minLen: number
-  /** a frame-border chain edge: aligns border dummies in placement, never routed */
-  border?: boolean
   /** carried by the first segment only */
   labels: InputLabel[]
   route: Pt[] | null
@@ -69,59 +66,13 @@ export interface LEdge {
   placed: PlacedLabel[]
 }
 
-export interface Compound {
-  id: string
-  label?: string
-  parent?: string
-  /** cross-axis units the top and bottom rows offer between the corners */
-  titleW: number
-  /** least flow-axis extent of the frame, border rows included */
-  minSpan: number
-}
-
 export interface LGraph {
   nodes: LNode[]
   edges: LEdge[]
   /** nodes per layer, in order; built by layering */
   layers: LNode[][]
-  compounds: Compound[]
   spacing: Spacing
   warnings: string[]
-}
-
-/** The compounds a node lies in, outermost first. */
-export function ancestors(g: LGraph, n: LNode): string[] {
-  return compoundChain(g, n.parent)
-}
-
-/** A compound and the compounds around it, outermost first. */
-export function compoundChain(g: LGraph, id: string | undefined): string[] {
-  const chain: string[] = []
-  for (let p = id; p !== undefined; p = g.compounds.find((c) => c.id === p)?.parent) {
-    chain.unshift(p)
-  }
-  return chain
-}
-
-/** A compound's top / bottom border node. */
-export const borderNode = (g: LGraph, id: string, side: 'top' | 'bottom'): LNode =>
-  g.nodes.find((n) => n.kind === 'border' && n.origin === id && n.border === side) as LNode
-
-/**
- * A compound's frame once its borders are placed: rows from its top to its
- * bottom row, columns from its leftmost left border to its rightmost right
- * border (they are straight unless placement had to bend a chain).
- */
-export function frameOf(g: LGraph, id: string): Rect | null {
-  const top = borderNode(g, id, 'top')
-  const bottom = borderNode(g, id, 'bottom')
-  const sides = g.nodes.filter((n) => n.kind === 'border' && n.origin === id && n.x >= 0)
-  const lefts = sides.filter((n) => n.border === 'left').map((n) => n.x)
-  const rights = sides.filter((n) => n.border === 'right').map((n) => n.x)
-  if (top === undefined || top.y < 0 || lefts.length === 0 || rights.length === 0) return null
-  const left = Math.min(...lefts)
-  const right = Math.max(...rights)
-  return { x: left, y: top.y, w: right - left + 1, h: bottom.y - top.y + 1 }
 }
 
 export function buildGraph(input: LayoutInput): LGraph {
@@ -131,57 +82,19 @@ export function buildGraph(input: LayoutInput): LGraph {
     nodes: [],
     edges: [],
     layers: [],
-    compounds: (input.compounds ?? []).map((c) => ({
-      id: c.id,
-      label: c.label,
-      parent: c.parent,
-      titleW: c.titleW ?? 0,
-      minSpan: c.minSpan ?? 0,
-    })),
     spacing: { ...input.spacing },
     warnings: [],
   }
-  const compoundIds = new Set(g.compounds.map((c) => c.id))
   const byId = new Map<string, LNode>()
-  const add = (node: LNode): void => {
-    byId.set(node.id, node)
-    g.nodes.push(node)
-  }
-  for (const c of g.compounds) {
-    if (c.parent !== undefined && !compoundIds.has(c.parent)) {
-      g.warnings.push(`compound "${c.id}" has an unknown parent "${c.parent}"`)
-      c.parent = undefined
-    }
-    for (const side of ['top', 'bottom'] as const) {
-      add({
-        id: `${c.id}/${side}`,
-        kind: 'border',
-        origin: c.id,
-        border: side,
-        parent: c.id,
-        w: c.titleW + 2,
-        h: 1,
-        layer: -1,
-        order: -1,
-        x: -1,
-        y: -1,
-        ports: [],
-      })
-    }
-  }
   for (const n of input.nodes) {
-    if (byId.has(n.id) || compoundIds.has(n.id)) {
-      g.warnings.push(`duplicate id "${n.id}" ignored`)
+    if (byId.has(n.id)) {
+      g.warnings.push(`duplicate node id "${n.id}" ignored`)
       continue
     }
-    if (n.parent !== undefined && !compoundIds.has(n.parent)) {
-      g.warnings.push(`node "${n.id}" has an unknown parent "${n.parent}"`)
-    }
-    add({
+    const node: LNode = {
       id: n.id,
       label: n.label,
       kind: 'node',
-      parent: n.parent !== undefined && compoundIds.has(n.parent) ? n.parent : undefined,
       w: n.w,
       h: n.h,
       layer: -1,
@@ -189,70 +102,60 @@ export function buildGraph(input: LayoutInput): LGraph {
       x: -1,
       y: -1,
       ports: [],
-    })
+    }
+    byId.set(n.id, node)
+    g.nodes.push(node)
   }
   for (const e of input.edges) {
-    const from = byId.get(compoundIds.has(e.from) ? `${e.from}/bottom` : e.from)
-    const to = byId.get(compoundIds.has(e.to) ? `${e.to}/top` : e.to)
+    const from = byId.get(e.from)
+    const to = byId.get(e.to)
     if (from === undefined || to === undefined) {
       g.warnings.push(`edge "${e.id}" refers to an unknown node`)
       continue
     }
-    if (from === to || (from.origin !== undefined && from.origin === to.origin)) {
-      g.warnings.push(`edge "${e.id}": self-loops are not routed yet`)
-      continue
-    }
     // One port per edge end, facing the declared direction for now; the
     // ordering phase settles sides, order and cells after cycle breaking.
-    linkNodes(g, e.id, from, to, { labels: (e.labels ?? []).map((l) => ({ ...l })) })
+    // A self-loop keeps both ends on the east side and is routed around
+    // the border there; every phase in between leaves it alone.
+    const loop = from === to
+    if (loop) from.loops = (from.loops ?? 0) + 1
+    const src: LPort = {
+      id: `${e.id}.s`,
+      node: from,
+      side: loop ? 'E' : 'S',
+      order: -1,
+      pos: -1,
+      in: [],
+      out: [],
+    }
+    const dst: LPort = {
+      id: `${e.id}.t`,
+      node: to,
+      side: loop ? 'E' : 'N',
+      order: -1,
+      pos: -1,
+      in: [],
+      out: [],
+    }
+    from.ports.push(src)
+    to.ports.push(dst)
+    const edge: LEdge = {
+      id: e.id,
+      origin: e.id,
+      src,
+      dst,
+      reversed: false,
+      weight: 1,
+      minLen: 1,
+      labels: (e.labels ?? []).map((l) => ({ ...l })),
+      route: null,
+      placed: [],
+    }
+    src.out.push(edge)
+    dst.in.push(edge)
+    g.edges.push(edge)
   }
   return g
-}
-
-/** A fresh port on `node`. */
-export function makePort(node: LNode, id: string, side: 'N' | 'S'): LPort {
-  const p: LPort = { id, node, side, order: -1, pos: -1, in: [], out: [] }
-  node.ports.push(p)
-  return p
-}
-
-/** A fresh edge on fresh ports, `from` south to `to` north. */
-export function linkNodes(
-  g: LGraph,
-  id: string,
-  from: LNode,
-  to: LNode,
-  extra: Partial<LEdge> = {},
-): LEdge {
-  const src = makePort(from, `${id}.s`, 'S')
-  const dst = makePort(to, `${id}.t`, 'N')
-  const e: LEdge = {
-    id,
-    origin: id,
-    src,
-    dst,
-    reversed: false,
-    weight: 1,
-    minLen: 1,
-    labels: [],
-    route: null,
-    placed: [],
-    ...extra,
-  }
-  src.out.push(e)
-  dst.in.push(e)
-  g.edges.push(e)
-  return e
-}
-
-/** Remove an edge, and its ports when nothing else uses them. */
-export function unlinkEdge(g: LGraph, e: LEdge): void {
-  g.edges.splice(g.edges.indexOf(e), 1)
-  e.src.out.splice(e.src.out.indexOf(e), 1)
-  e.dst.in.splice(e.dst.in.indexOf(e), 1)
-  for (const p of [e.src, e.dst]) {
-    if (p.in.length + p.out.length === 0) p.node.ports.splice(p.node.ports.indexOf(p), 1)
-  }
 }
 
 /**
@@ -265,12 +168,10 @@ export function cloneGraph(g: LGraph): LGraph {
   return structuredClone(g)
 }
 
-/** The graph as the lab draws it; fields still at `-1` are left out.
- * Border nodes show as dummies inside their compound's hull. */
+/** The graph as the lab draws it; fields still at `-1` are left out. */
 export function toSnapshot(g: LGraph, title: string): Snapshot {
   const nodes: SNode[] = g.nodes.map((n) => {
     const s: SNode = { id: n.id }
-    if (n.parent !== undefined) s.parent = n.parent
     if (n.kind !== 'node') s.kind = 'dummy'
     else {
       if (n.label !== undefined) s.label = n.label
@@ -289,14 +190,6 @@ export function toSnapshot(g: LGraph, title: string): Snapshot {
     })
     return s
   })
-  for (const c of g.compounds) {
-    const s: SNode = { id: c.id, kind: 'compound' }
-    if (c.label !== undefined) s.label = c.label
-    if (c.parent !== undefined) s.parent = c.parent
-    const frame = frameOf(g, c.id)
-    if (frame !== null) Object.assign(s, frame)
-    nodes.push(s)
-  }
   const edges: SEdge[] = g.edges.map((e) => {
     const s: SEdge = { from: e.src.node.id, to: e.dst.node.id }
     s.fromPort = e.src.id

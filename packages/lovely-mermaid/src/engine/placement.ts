@@ -11,11 +11,6 @@
  * every coordinate stays an integer. `networkSimplex` is the second
  * strategy: the auxiliary graph of ch. 4 §3 solved by `nsSolve`, weights
  * 4/8/32 favouring straight long edges.
- *
- * A compound frame's left and right columns are border dummies chained
- * by border edges (added with the long-edge dummies), so both placers keep
- * each column straight like a long edge. `framePad` is the gap on both
- * sides of a border.
  */
 import type { LEdge, LGraph, LNode } from './graph.ts'
 import { cloneGraph } from './graph.ts'
@@ -28,18 +23,22 @@ export type PlaceTrace = (g: LGraph, note: string) => void
 export function placeNodes(g0: LGraph, opts: PlacementOptions, trace?: PlaceTrace): LGraph {
   const g = cloneGraph(g0)
   if (g.layers.length === 0) return g
-  const x = opts.strategy === 'networkSimplex' ? networkSimplexPlace(g) : brandesKoepf(g, trace)
+  const x =
+    opts.strategy === 'networkSimplex'
+      ? networkSimplexPlace(g)
+      : brandesKoepf(g, opts.compactTies === true, trace)
   const min = Math.min(...x.values())
   for (const n of g.nodes) n.x = (x.get(n) as number) - min
   return g
 }
 
-/** Cross-axis gap between two neighbours in a layer, by what they are. */
+/** Cross-axis gap between two neighbours in a layer, by what they are;
+ * a self-loop reserves two extra columns east of its node. */
 export function gap(sp: Spacing, a: LNode, b: LNode): number {
-  if (a.kind === 'border' || b.kind === 'border') return sp.framePad
-  if (a.kind === 'node' && b.kind === 'node') return sp.nodeNode
-  if (a.kind === 'dummy' && b.kind === 'dummy') return sp.edgeEdge
-  return sp.nodeEdge
+  const loops = 2 * (a.loops ?? 0)
+  if (a.kind === 'node' && b.kind === 'node') return sp.nodeNode + loops
+  if (a.kind !== 'node' && b.kind !== 'node') return sp.edgeEdge + loops
+  return sp.nodeEdge + loops
 }
 
 // ---------------------------------------------------------------- Brandes–Köpf
@@ -48,19 +47,27 @@ interface Neighbour {
   node: LNode
   edge: LEdge
 }
-/** Which neighbours a block follows (above = predecessors) and which way blocks pack. */
+/** Which neighbours a block follows (above = predecessors), which way
+ * blocks pack, and whether an edge chain may align across kinds — a chain
+ * hanging on to its port keeps the source's width below it (a fan out of a
+ * wide node reserves the whole width); `free` cuts those links, so chains
+ * still run straight but float and pack at `edgeEdge`, bending in the
+ * channels instead. */
 interface Variant {
   up: boolean
   left: boolean
+  free: boolean
 }
-const VARIANTS: Variant[] = [
-  { up: true, left: true },
-  { up: true, left: false },
-  { up: false, left: true },
-  { up: false, left: false },
-]
+const VARIANTS: Variant[] = [false, true].flatMap((free) =>
+  [
+    { up: true, left: true },
+    { up: true, left: false },
+    { up: false, left: true },
+    { up: false, left: false },
+  ].map((v) => ({ ...v, free })),
+)
 
-function brandesKoepf(g: LGraph, trace?: PlaceTrace): Map<LNode, number> {
+function brandesKoepf(g: LGraph, compactTies: boolean, trace?: PlaceTrace): Map<LNode, number> {
   const layers = g.layers
   // neighbours per node, sorted by their position in the adjacent layer
   const upper = new Map<LNode, Neighbour[]>()
@@ -69,8 +76,8 @@ function brandesKoepf(g: LGraph, trace?: PlaceTrace): Map<LNode, number> {
     const ups: Neighbour[] = []
     const downs: Neighbour[] = []
     for (const p of n.ports) {
-      for (const e of p.in) ups.push({ node: e.src.node, edge: e })
-      for (const e of p.out) downs.push({ node: e.dst.node, edge: e })
+      for (const e of p.in) if (e.src.node !== n) ups.push({ node: e.src.node, edge: e })
+      for (const e of p.out) if (e.dst.node !== n) downs.push({ node: e.dst.node, edge: e })
     }
     ups.sort((a, b) => a.node.order - b.node.order)
     downs.sort((a, b) => a.node.order - b.node.order)
@@ -79,22 +86,36 @@ function brandesKoepf(g: LGraph, trace?: PlaceTrace): Map<LNode, number> {
   }
   const marked = markConflicts(layers, upper)
 
-  let best: { x: Map<LNode, number>; width: number } | null = null
+  let best: { x: Map<LNode, number>; width: number; span: number } | null = null
   for (const [k, v] of VARIANTS.entries()) {
     const x = alignAndCompact(g, layers, v.up ? upper : lower, v, marked)
     const width = extent(layers, x)
+    // equal widths are broken by the rows' summed extents: a row stretched
+    // across the whole width by blocks pinned apart loses to a packed one
+    let span = 0
+    for (const row of layers) {
+      if (row.length === 0) continue
+      let lo = Number.POSITIVE_INFINITY
+      let hi = Number.NEGATIVE_INFINITY
+      for (const n of row) {
+        lo = Math.min(lo, x.get(n) as number)
+        hi = Math.max(hi, (x.get(n) as number) + n.w)
+      }
+      span += hi - lo
+    }
     const valid = ordered(g, layers, x)
     if (trace !== undefined) {
       const min = Math.min(...x.values())
       for (const n of g.nodes) n.x = (x.get(n) as number) - min
       trace(
         g,
-        `${v.up ? 'upper' : 'lower'} medians, packed ${v.left ? 'left' : 'right'} · width ${width}${valid ? '' : ' · overlaps'}`,
+        `${v.up ? 'upper' : 'lower'} medians${v.free ? ', free chains' : ''}, packed ${v.left ? 'left' : 'right'} · width ${width}${valid ? '' : ' · overlaps'}`,
       )
     }
     // an overlapping candidate is skipped unless nothing else remains
     if (!valid && k < VARIANTS.length - 1) continue
-    if (best === null || (valid && width < best.width)) best = { x, width }
+    const tie = compactTies && best !== null && width === best.width && span < best.span
+    if (best === null || (valid && (width < best.width || tie))) best = { x, width, span }
   }
   return best === null ? new Map() : best.x
 }
@@ -102,34 +123,15 @@ function brandesKoepf(g: LGraph, trace?: PlaceTrace): Map<LNode, number> {
 /**
  * Type-1 conflicts: an edge between two dummies (an inner segment) must
  * stay straight, so any ordinary edge crossing it is marked and never used
- * for alignment. The paper's Alg. 1 with 0-based indices, run twice: first
- * with the frame-border chains as the only inner segments, so that even a
- * long edge entering a frame through its side bends rather than the
- * frame; then with the unmarked dummy segments.
+ * for alignment. The paper's Alg. 1 with 0-based indices.
  */
 function markConflicts(layers: LNode[][], upper: Map<LNode, Neighbour[]>): Set<LEdge> {
   const marked = new Set<LEdge>()
-  const first = (v: LNode): Neighbour | undefined => (upper.get(v) as Neighbour[])[0]
-  const border = (v: LNode): Neighbour | undefined => {
-    const u = first(v)
-    return u?.edge.border === true ? u : undefined
+  const inner = (v: LNode): Neighbour | undefined => {
+    if (v.kind === 'node') return undefined
+    const u = (upper.get(v) as Neighbour[])[0]
+    return u !== undefined && u.node.kind !== 'node' ? u : undefined
   }
-  const segment = (v: LNode): Neighbour | undefined => {
-    const u = first(v)
-    if (u === undefined || marked.has(u.edge)) return undefined
-    return u.edge.border === true || (v.kind === 'dummy' && u.node.kind === 'dummy') ? u : undefined
-  }
-  markCrossing(layers, upper, border, marked)
-  markCrossing(layers, upper, segment, marked)
-  return marked
-}
-
-function markCrossing(
-  layers: LNode[][],
-  upper: Map<LNode, Neighbour[]>,
-  inner: (v: LNode) => Neighbour | undefined,
-  marked: Set<LEdge>,
-): void {
   for (let i = 0; i + 1 < layers.length; i++) {
     const cur = layers[i + 1]
     let k0 = 0
@@ -152,6 +154,7 @@ function markCrossing(
       }
     }
   }
+  return marked
 }
 
 /** The cell offset at which `e` leaves / enters `n`. */
@@ -189,6 +192,16 @@ function alignAndCompact(
         const { node: u, edge } = nb[m]
         const ok = v.left ? r < u.order : r > u.order
         if (marked.has(edge) || !ok) continue
+        // free: an ordinary chain lets go of its node — but a port dummy
+        // sticks to its member, else the frame's ports bunch up and the
+        // parent level pays for it
+        if (
+          v.free &&
+          n.kind !== 'port' &&
+          u.kind !== 'port' &&
+          (n.kind === 'node') !== (u.kind === 'node')
+        )
+          continue
         align.set(u, n)
         root.set(n, root.get(u) as LNode)
         align.set(n, root.get(n) as LNode)
@@ -333,17 +346,16 @@ function networkSimplexPlace(g: LGraph): Map<LNode, number> {
   const edges: NsEdge[] = []
   let count = g.nodes.length
   for (const e of g.edges) {
+    if (e.src.node === e.dst.node) continue
     const s = index.get(e.src.node) as number
     const t = index.get(e.dst.node) as number
     const d = count++
     const w =
-      e.border === true
-        ? 64
-        : e.src.node.kind === 'dummy' && e.dst.node.kind === 'dummy'
-          ? 32
-          : e.src.node.kind === 'dummy' || e.dst.node.kind === 'dummy'
-            ? 8
-            : 4
+      e.src.node.kind !== 'node' && e.dst.node.kind !== 'node'
+        ? 32
+        : e.src.node.kind !== 'node' || e.dst.node.kind !== 'node'
+          ? 8
+          : 4
     const ps = e.src.pos
     const pt = e.dst.pos
     edges.push({ s: d, t: s, w, delta: Math.max(0, pt - ps) })

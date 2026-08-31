@@ -29,7 +29,7 @@ describe('engine pipeline', () => {
       ...PHASES,
     ])
     expect(Object.keys(res.nodes).sort()).toEqual(['A', 'B', 'C'])
-    expect(Object.keys(res.edges).sort()).toEqual(['ab', 'bc', 'ca'])
+    expect(Object.keys(res.edges).sort()).toEqual(['aa', 'ab', 'bc', 'ca'])
     for (const r of Object.values(res.nodes)) {
       for (const v of [r.x, r.y, r.w, r.h]) expect(Number.isInteger(v)).toBe(true)
     }
@@ -39,11 +39,18 @@ describe('engine pipeline', () => {
     // the reversed edge C→A runs upward, from its declared source
     const ca = res.edges.ca.route
     expect(ca[0][1]).toBeGreaterThan(ca[ca.length - 1][1])
-    expect(res.warnings).toEqual(['edge "aa": self-loops are not routed yet'])
+    expect(res.warnings).toEqual([])
+    // the self-loop hangs off A's east border, two columns out
+    const A = res.nodes.A
+    const aa = res.edges.aa.route
+    expect(aa.length).toBe(4)
+    expect(aa[0]).toEqual([A.x + A.w - 1, A.y + A.h - 1])
+    expect(aa[1][0]).toBe(A.x + A.w + 1)
+    expect(aa[3]).toEqual([A.x + A.w - 1, A.y + A.h - 2])
     // ports exist from import, unplaced
     expect(snaps[0].nodes.map((n) => n.id)).toEqual(['A', 'B', 'C'])
-    expect(snaps[0].edges.map((e) => `${e.from}>${e.to}`)).toEqual(['A>B', 'B>C', 'C>A'])
-    expect(snaps[0].nodes[0].ports?.map((p) => p.side)).toEqual(['S', 'N'])
+    expect(snaps[0].edges.map((e) => `${e.from}>${e.to}`)).toEqual(['A>B', 'B>C', 'C>A', 'A>A'])
+    expect(snaps[0].nodes[0].ports?.map((p) => p.side)).toEqual(['S', 'N', 'E', 'E'])
   })
 
   test('`until` stops after the named phase', () => {

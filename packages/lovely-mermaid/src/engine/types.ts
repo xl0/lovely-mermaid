@@ -26,21 +26,20 @@ export interface InputNode {
 }
 
 /**
- * A subgraph. Its frame is not a node: the engine represents it by border
- * nodes (a top and a bottom row, left and right columns) and lays out one
- * global graph, so cross-frame edges stay short and layers align. An edge
- * to a compound enters its top row, one from a compound leaves its bottom.
+ * A subgraph. Its members are laid out on their own and the frame takes
+ * part in the parent's layout as one node; an edge crossing the frame is
+ * cut at a port on the border and routed on both sides. An edge to the
+ * compound itself attaches to the frame.
  */
 export interface InputCompound {
   id: string
   label?: string
   parent?: string
-  /** cross-axis units the top and bottom rows must offer, corners excluded
-   * (the title of a vertical flow sits there) */
+  /** units the title needs on the frame's top row, corners excluded */
   titleW?: number
-  /** least flow-axis extent of the frame, border rows included (a sideways
-   * flow puts the title along it) */
-  minSpan?: number
+  /** flow direction override, honoured only when no edge crosses the
+   * frame and the whole layout flows down or right */
+  dir?: 'down' | 'right'
 }
 
 export interface InputLabel {
@@ -79,6 +78,9 @@ export interface LayoutInput {
   edges: InputEdge[]
   compounds?: InputCompound[]
   spacing: Spacing
+  /** the other axis's spacing profile, used inside compounds whose `dir`
+   * turns them against the main flow */
+  altSpacing?: Spacing
 }
 
 /** The phases, in pipeline order; also the snapshot titles. */
@@ -92,6 +94,9 @@ export interface CyclesOptions {
 }
 export interface LayeringOptions {
   strategy?: 'networkSimplex' | 'longestPath'
+  /** stagger a row wider than this (node widths plus gaps, in units) into
+   * two layers — trades height for width; off when absent */
+  maxWidth?: number
 }
 export interface OrderingOptions {
   /** `none` keeps declaration order (ports still get cells) */
@@ -103,6 +108,10 @@ export interface OrderingOptions {
 }
 export interface PlacementOptions {
   strategy?: 'bk' | 'networkSimplex'
+  /** break equal-width candidate ties by the rows' summed extents (set on
+   * the root level; inner levels stay stable so frame ports do not move
+   * between equally narrow inner picks) */
+  compactTies?: boolean
 }
 /** no knobs yet */
 export type RoutingOptions = Record<string, never>
