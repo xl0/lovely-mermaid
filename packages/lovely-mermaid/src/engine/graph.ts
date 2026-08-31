@@ -36,7 +36,8 @@ export interface LNode {
   origin?: string
   /** pinned to the first / last layer (a port on the frame's top / bottom) */
   at?: 'first' | 'last'
-  /** number of self-loops, each reserving two columns to the east */
+  /** number of self-loops, each reserving two columns east of the node
+   * for the return leg */
   loops?: number
   w: number
   h: number
@@ -115,14 +116,14 @@ export function buildGraph(input: LayoutInput): LGraph {
     }
     // One port per edge end, facing the declared direction for now; the
     // ordering phase settles sides, order and cells after cycle breaking.
-    // A self-loop keeps both ends on the east side and is routed around
-    // the border there; every phase in between leaves it alone.
-    const loop = from === to
-    if (loop) from.loops = (from.loops ?? 0) + 1
+    // A self-loop leaves the bottom border and re-enters the top one, a
+    // miniature cycle around the east side; the phases in between leave
+    // it alone, but its ends take ordinary border cells.
+    if (from === to) from.loops = (from.loops ?? 0) + 1
     const src: LPort = {
       id: `${e.id}.s`,
       node: from,
-      side: loop ? 'E' : 'S',
+      side: 'S',
       order: -1,
       pos: -1,
       in: [],
@@ -131,7 +132,7 @@ export function buildGraph(input: LayoutInput): LGraph {
     const dst: LPort = {
       id: `${e.id}.t`,
       node: to,
-      side: loop ? 'E' : 'N',
+      side: 'N',
       order: -1,
       pos: -1,
       in: [],

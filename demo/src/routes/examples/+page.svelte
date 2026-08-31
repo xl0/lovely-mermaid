@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { base } from '$app/paths';
+	import { packHash, unpackHash } from '$lib/hash';
 	import { SvelteSet } from 'svelte/reactivity';
 	import type { LayoutOptions } from 'lovely-mermaid-engine';
 	import DiagramViewer from '$lib/DiagramViewer.svelte';
@@ -20,6 +21,65 @@
 	let elkOn = $state(true);
 	let engineOpts = $state<LayoutOptions>({});
 	let engineMenuOpen = $state(false);
+	let fitWidth = $state<number | null>(null);
+
+	// The settings travel in the URL hash so a reload keeps them.
+	let loaded = $state(false);
+	{
+		const h = location.hash.slice(1);
+		if (h === '') loaded = true;
+		else {
+			unpackHash(h)
+				.then((json) => {
+					const v = JSON.parse(json) as {
+						renderer?: typeof renderer;
+						elkOn?: boolean;
+						elkExtra?: Record<string, string>;
+						engineOpts?: LayoutOptions;
+						fitWidth?: number | null;
+						showLabels?: boolean;
+						dark?: boolean;
+					};
+					if (v.renderer !== undefined) renderer = v.renderer;
+					if (v.elkOn !== undefined) elkOn = v.elkOn;
+					if (v.elkExtra !== undefined) elkExtra = v.elkExtra;
+					if (v.engineOpts !== undefined) engineOpts = v.engineOpts;
+					if (v.fitWidth !== undefined) fitWidth = v.fitWidth;
+					if (v.showLabels !== undefined) showLabels = v.showLabels;
+					if (v.dark !== undefined) dark = v.dark;
+				})
+				.catch(() => {})
+				.finally(() => (loaded = true));
+		}
+	}
+	let writeSeq = 0;
+	$effect(() => {
+		const json = JSON.stringify({
+			renderer,
+			elkOn,
+			elkExtra,
+			engineOpts,
+			fitWidth,
+			showLabels,
+			dark
+		});
+		if (!loaded) return;
+		const seq = ++writeSeq;
+		const t = setTimeout(() => {
+			packHash(json).then((h) => {
+				if (seq === writeSeq) history.replaceState(null, '', `${base}/examples#${h}`);
+			});
+		}, 300);
+		return () => clearTimeout(t);
+	});
+	// typing in the fit box re-runs the candidate loop on every card:
+	// commit after a pause (or instantly on Enter/blur via change)
+	let fitTimer: ReturnType<typeof setTimeout> | undefined;
+	function commitFit(v: string) {
+		clearTimeout(fitTimer);
+		fitWidth = v === '' ? null : Number(v);
+	}
+	let showLabels = $state(true);
 	let dark = $state(true);
 	$effect(() => {
 		document.body.classList.toggle('light', !dark);
@@ -102,6 +162,23 @@
 			disabled={renderer !== 'lovely'}
 			onclick={() => (elkOn = !elkOn)}>[elk]</button
 		>
+		{#if renderer === 'engine'}
+			<label class="dim">labels <input type="checkbox" bind:checked={showLabels} /></label>
+			<label class="dim fit">
+				fit <input
+					type="number"
+					min="20"
+					placeholder="off"
+					value={fitWidth ?? ''}
+					oninput={(e) => {
+						const v = e.currentTarget.value;
+						clearTimeout(fitTimer);
+						fitTimer = setTimeout(() => commitFit(v), 500);
+					}}
+					onchange={(e) => commitFit(e.currentTarget.value)}
+				/>
+			</label>
+		{/if}
 		<button
 			class="ghost"
 			class:active={engineMenuOpen || elkMenuOpen}
@@ -165,9 +242,33 @@
 					>
 				</h2>
 				<div class="frame" class:split={srcOpen.has(d.name)}>
-					<DiagramViewer src={d.src} {renderer} {elkOn} {elkExtra} {engineOpts} {dark} {theme} />
+					<DiagramViewer
+						src={d.src}
+						{renderer}
+						{elkOn}
+						{elkExtra}
+						{engineOpts}
+						{fitWidth}
+						{showLabels}
+						{dark}
+						{theme}
+					/>
 					{#if srcOpen.has(d.name)}
-						<pre class="src">{d.src}</pre>
+						<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+						<pre
+							class="src"
+							tabindex="0"
+							onkeydown={(e) => {
+								// select-all inside the pane selects the source only
+								if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+									e.preventDefault();
+									const sel = getSelection();
+									const range = document.createRange();
+									range.selectNodeContents(e.currentTarget);
+									sel?.removeAllRanges();
+									sel?.addRange(range);
+								}
+							}}>{d.src}</pre>
 					{/if}
 				</div>
 			</section>
@@ -252,6 +353,16 @@
 	.elk-reset {
 		margin-top: 0.4rem;
 	}
+	.fit input {
+		width: 4.5rem;
+		font: inherit;
+		font-size: 0.85rem;
+		background: var(--bg);
+		color: var(--fg);
+		border: 1px solid var(--muted);
+		border-radius: 3px;
+		padding: 0.1rem 0.3rem;
+	}
 
 	.cards {
 		display: flex;
@@ -277,6 +388,7 @@
 	}
 	.src {
 		margin: 0;
+		outline: none;
 		padding: 0.6rem 0.9rem;
 		max-width: 36rem;
 		overflow: auto;

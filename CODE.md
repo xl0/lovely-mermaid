@@ -28,6 +28,9 @@ docs/elk-layered.md       ELK Layered code dive (eclipse/elk @ 8aaa3c14): pipeli
 docs/learn-plan.md        /learn lesson series roadmap + writing conventions
 demo/src/routes/          / (streaming demo), /render (renderer/ELK toggles +
                           ELK options dropdown), /examples (engine renders by default via the
+                          candidate loop when the bar's `fit` width is
+                          set — badge shows the chosen candidate and a
+                          table on hover —
                           lab's snapshot SVG on the flat snapshot,
                           [opts] = the lab's engine options; sequence
                           falls back to the rule renderer; [legacy],
@@ -133,8 +136,38 @@ the start alone; verified against brute force on random small DAGs.
 into two adjacent layers — always legal: in-edges lengthen by one, out-
 edges keep their span; nodes with more outgoing than incoming edges move
 down so their edges stay short. Off by default; the sweet spot is a
-candidate-loop knob (~150 halves arch-state's width for a third more
-height; too low and the extra dummy columns win it back).
+candidate-loop knob. Both the stagger and the
+*packing* that follows reason in an estimated rendered row width — nodes
+plus a `1 + edgeEdge` column per edge passing the layer — so a cap
+approximates the final width, not just the boxes. Packing's one
+primitive is dispersal: every node of a layer moves to its own nearest
+feasible row and the layer dies (total edge length can only drop); each
+target stays within the cap or the currently widest row estimate,
+whichever is larger, so real slack fills but nothing widens. Emptied
+layer values are dropped where every spanning edge has slack; rim rows
+neither move nor receive. The loop's cap search tightens until a
+candidate fits, then bisects back up toward the loosest fitting cap
+(a too-tight cap trades far more height than the target asks). Estimates
+stop there; `squeeze` (an engine option, set from `fit.width` by the
+loop) is *geometry feedback*: after a full pass every root band's
+occupancy is measured from the actual nodes and routes as merged
+x-intervals (vertical runs count in every band they cross), and one
+row of real nodes per iteration evacuates into gaps that fit them;
+the layers are forced back onto the kept pre-split graph
+(`applyLayers`), the later phases re-run, and the move is kept only
+when the re-measured width and height do not regress — a rejected
+row is remembered and the next one tried, up to twelve iterations.
+One row at a time matters: each accepted move's real cost (new trunk
+columns from longer edges) is measured before the next decision. It
+fills exactly the holes no layering-time estimate can see
+(session-er@100: 89×242 → 93×161).
+After cycle breaking has fixed each edge's side, a node too narrow for
+its busiest side is widened to give its ports the same pitch the
+channels give parallel edges — a cell per edge plus `edgeEdge` between,
+corners never usable (a tee on a corner cell turns `┌` into `┬` and
+breaks the box) — so a forward/return pair runs on parallel cells
+instead of collapsing onto one; the router's free-column detour for coincident straights remains as
+the last resort (fixed-port frames).
 **order** — ELK's layer sweep over port ranks without its randomness:
 a free layer sorts by the barycenter (integer ratio) of the port ranks it
 reaches in the fixed neighbour, its facing ports sort by those ranks, then
@@ -185,14 +218,21 @@ sources), stub → trunk row → stub; trunks with overlapping extents get a
 dependency towards fewer stub/trunk crossings, an order in which two
 stubs would run down the same column is forbidden, and a pair forbidden
 both ways (the X) splits one trunk into two joined by a jog through a
-free column, as ELK does; greedy FAS over the dependencies, tracks by
+free column, as ELK does; two straights sharing a column (a forward /
+return pair on a narrow side, a doubled edge) would coincide, so only
+the first stays straight and each surplus one gets its own forced
+trunk pair through a free column; greedy FAS over the dependencies, tracks by
 longest path, straight edges take no track; channel height = tracks + 2
 gap rows (one row when everything is straight, for the arrowhead); band
 tops follow; a dummy spans its band. Self-loops never enter the pipeline
-proper: both ends sit on the node's **east** side (every other phase
-skips them), placement's `gap` reserves two columns per loop east of the
-node, and routing draws the hook — out the border, around, back in one
-row higher; `A --> G` from inside G becomes a loop on the frame.
+proper (every phase's graph algorithms skip them), but their ends are
+ordinary S/N ports — they take border cells, count toward the width
+bump, and sort last on their sides so the wrap crosses none of the
+node's other stubs. Placement's `gap` reserves two columns per loop east of the node;
+routing draws a miniature cycle — out the bottom border, around the east
+side, back in through the top (a first-layer loop pushes the bands down
+by its wrap rows; stacked loops warn, they may cross tracks); `A --> G`
+from inside G becomes a loop wrapping the frame.
 **labels** is still a pass-through. `docs/elk-layered.md`
 ch. 8 lists what remains.
 
@@ -242,6 +282,27 @@ breaking on the frame-level graph changes the reading order — a
 candidate-loop knob), `arch-state` 239×318 (old 378×432),
 `arch-classes` 316×104 (old 400×120). Not yet: ports avoiding the title
 cells.
+
+`layoutBest(input, opts?, fit?, trace?)` is the candidate loop: it runs
+`layout` under a few option combinations and keeps the best. Knobs set
+explicitly in `opts` are respected; the free dimensions are searched —
+cycle breaking (greedy/dfs) × placement (bk/networkSimplex) — and when
+`fit.width` is given and nothing fits a down-flow layout, cap passes
+follow (`layering.maxWidth` = the target, then tightened by the observed
+overshoot, then bisected up toward the loosest fitting cap), all inside
+`fit.budget` (default 12) layouts. Only the two most promising uncapped
+probes advance to the capped phase: no combo is globally dominated on
+the corpus (each of the four wins somewhere), but a deep ladder on the
+right combos beats a broad shallow sweep — measured, it flipped a miss
+into a fit while cutting ~25% of the time.
+Ranking is lexicographic, deterministic, first of equals: with a target —
+fits, then height, then width; without — width, then height. The winner
+re-runs with `trace` so the lab sees its phases; the returned
+`candidates` table carries every label and size. Whole-tree runs only:
+port positions couple levels, so level-local scores lie. Corpus: with no
+target the loop alone beats the defaults (arch-system 258→227); targets
+are best-effort (a target under the structural floor returns the least
+bad). ~0.5 s worst case on the corpus.
 
 The bridge (`layout-engine.ts`) measures nodes from wrapped labels /
 compartments (no even-width forcing), turns `cardFrom`/`cardTo` into tail /

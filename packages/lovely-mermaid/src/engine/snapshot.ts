@@ -12,6 +12,8 @@
 export interface Snapshot {
   /** Shown as the picture's title — the phase name. */
   title?: string
+  /** flow direction of the picture; the lab bands along it (default down) */
+  dir?: 'down' | 'up' | 'right' | 'left'
   nodes: SNode[]
   edges: SEdge[]
 }

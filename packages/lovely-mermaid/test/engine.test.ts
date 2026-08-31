@@ -40,17 +40,41 @@ describe('engine pipeline', () => {
     const ca = res.edges.ca.route
     expect(ca[0][1]).toBeGreaterThan(ca[ca.length - 1][1])
     expect(res.warnings).toEqual([])
-    // the self-loop hangs off A's east border, two columns out
+    // the self-loop leaves A's bottom, wraps two columns east, re-enters the top
     const A = res.nodes.A
     const aa = res.edges.aa.route
-    expect(aa.length).toBe(4)
-    expect(aa[0]).toEqual([A.x + A.w - 1, A.y + A.h - 1])
-    expect(aa[1][0]).toBe(A.x + A.w + 1)
-    expect(aa[3]).toEqual([A.x + A.w - 1, A.y + A.h - 2])
+    expect(aa.length).toBe(6)
+    expect(aa[0][1]).toBe(A.y + A.h - 1)
+    expect(aa[1][1]).toBe(A.y + A.h)
+    expect(aa[2][0]).toBe(A.x + A.w + 1)
+    expect(aa[4][1]).toBe(A.y - 1)
+    expect(aa[5][1]).toBe(A.y)
     // ports exist from import, unplaced
     expect(snaps[0].nodes.map((n) => n.id)).toEqual(['A', 'B', 'C'])
     expect(snaps[0].edges.map((e) => `${e.from}>${e.to}`)).toEqual(['A>B', 'B>C', 'C>A', 'A>A'])
-    expect(snaps[0].nodes[0].ports?.map((p) => p.side)).toEqual(['S', 'N', 'E', 'E'])
+    expect(snaps[0].nodes[0].ports?.map((p) => p.side)).toEqual(['S', 'N', 'S', 'N'])
+  })
+
+  test('a narrow node widens for its busiest side: a 2-cycle runs on parallel lines', () => {
+    const res = layout({
+      dir: 'right',
+      spacing: { nodeNode: 1, nodeEdge: 0, edgeEdge: 0, channelGap: 1, framePad: 0 },
+      nodes: [
+        { id: 'A', w: 8, h: 3 },
+        { id: 'B', w: 8, h: 3 },
+      ],
+      edges: [
+        { id: 'ab', from: 'A', to: 'B' },
+        { id: 'ba', from: 'B', to: 'A' },
+      ],
+    })
+    // one extra row so each direction gets its own border cell
+    expect(res.nodes.A.h).toBe(4)
+    const rows = [res.edges.ab.route, res.edges.ba.route].map((r) => r[0][1])
+    expect(rows[0]).not.toBe(rows[1])
+    for (const r of [res.edges.ab.route, res.edges.ba.route]) {
+      expect(new Set(r.map(([, y]) => y)).size).toBe(1) // each dead straight
+    }
   })
 
   test('`until` stops after the named phase', () => {

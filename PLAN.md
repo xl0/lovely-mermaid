@@ -170,7 +170,9 @@ visualization comes first and every phase must be viewable.
 - [x] Chain relaxation in routing (2026-08-31): dummies are gaps, not
       columns; chains slide within slack toward their ports, bend-minimal
       (greedy stabbing). Staircases gone; widths unchanged, arch-state
-      height −17. Reversed edges now flagged in the lab's flat view.
+      height −17. The flat snapshot is a result view: routes run
+      source→target, carries `dir`, no reversed flags, no phase
+      diagnostics; the lab bands along the flow axis.
 - [x] Port-order handshake (2026-08-31): the parent pre-orders each
       child's ports (provisional order pass, free-port placeholders); the
       child's rim rows are pinned to it and the members follow. Border
@@ -182,9 +184,10 @@ visualization comes first and every phase must be viewable.
       zero): ports sit over what they connect to, the hairpin loops at
       frame borders are gone. arch-system 258×307 (port placement bought
       back 19 columns; old renderer 312×182), arch-state 239×318.
-- [x] Self-loops (2026-08-31): east-side hook, two columns reserved per
-      loop, every mid phase skips them; member→own-frame edges become
-      frame loops. Subgraph `direction` honoured for closed frames
+- [x] Self-loops (2026-08-31): a miniature bottom-to-top cycle around
+      the east side (reserved columns; ends are ordinary S/N ports, so
+      no corner cells and the width bump counts them); member→own-frame
+      edges become frame loops. Subgraph `direction` honoured for closed frames
       (transposed scope, parity-aware leaf sizes, `altSpacing` profile).
       Examples page renders with the engine by default (+ engine options
       panel; legacy/elk/mermaid modes kept).
@@ -197,12 +200,62 @@ visualization comes first and every phase must be viewable.
       the loop fits (the cap is soft; real width overshoots by the dummy
       columns, ~10–15%, so iterate cap = target − observed overhead) and
       the bridge derives per-level caps (minus frame borders per depth).
-- [ ] Next: the candidate loop (score real width per order/placement/
-      cycle-strategy variant; the 85-column e64/e75 case; the maxWidth
-      cap; dfs vs greedy; bk vs NS). Then labels
-      (decisions pending, deliberately after the loop).
-- [ ] Still to land: port capacity → merged cells / wider nodes; free
-      ports off the title cells; shared edge columns (bundling).
+- [x] Candidate loop (2026-08-31): `layoutBest` — greedy/dfs × bk/NS,
+      plus cap passes toward `fit.width`; lexicographic rank (fits →
+      height → width with a target; width → height without), budget 12,
+      winner re-traced. `traceEngineFit` in the bridge; the examples bar
+      grew a `fit` input (badge = chosen candidate, hover = the table).
+      No target already beats defaults: arch-system 258→227. Fine-tuning
+      parked: cap refinement is one step (results non-monotonic in the
+      target — fit 120 found cap26 → 156 wide, fit 80 stopped at 191);
+      a cap ladder / binary search within budget when we return to it.
+- [ ] Next: labels (decisions pending). Then the width-aware ordering
+      case (the 85-column e64/e75 hole) as a loop dimension.
+- [x] Geometry feedback (2026-08-31): `squeeze` — measure band
+      occupancy from the routed picture as merged x-intervals, move one
+      row per iteration into gaps that fit it, force layers back
+      (applyLayers) and re-run split→order→place→route; accept only
+      non-regressing measurements, remember rejected rows. session-er
+      @100: 89×242 → 93×161. Hard-target policy confirmed by the user
+      (terminal width is a wall).
+- [x] Search narrowing (2026-08-31): measured all 4 combos across the
+      corpus — none globally dominated (dfs+ns sole-wins arch-system
+      @134), so both dims stay; but only the top-2 uncapped probes get
+      cap runs. session-er@173: MISS 186×98 → fits 154×108; ~25% faster.
+- [x] Fit search refined (2026-08-31): full-budget cap bisection; a
+      packWidth spend step was tried and removed (est error too
+      nonlinear — cap52+pack63 rendered 135 where cap52 rendered 89).
+      Session-er@100's frontier is genuinely 89×242: probes at caps
+      58/64/76 render 113/150/121, all over target, and width is
+      non-monotonic in the cap. Filling the last holes needs *geometry
+      feedback*: re-layer using actual rendered per-row occupancy from a
+      completed run (candidate-loop v2), not better estimates.
+- [x] Packing v2 (2026-08-31): split and pack reason in estimated
+      rendered row width (nodes + passing-edge columns), the pack
+      primitive is whole-row dispersal, and the loop bisects up to the
+      loosest fitting cap. session-er fit-100 actually fits now (89
+      wide); scoring question stands: 89×242 beats a 108×150 near-miss
+      only because the target is treated as hard.
+- [x] Layer packing (2026-08-31): width-aware never-worse moves after
+      layering (row merges, lone-node tucks, safe layer drops), bounded
+      by the cap or the current widest row. Capped runs improved
+      (arch-state fit-120: 155→133 wide; the ER loop −8 rows, the lone
+      BRANCH_SUMMARY tucks in); uncapped corpus untouched. The user's
+      range idea lives here: ASAP/ALAP slack is the range, finalized
+      inside layering where widths are known — ranges through the whole
+      pipeline rejected (ordering needs concrete layers).
+- [x] Node slack relaxation (2026-08-31): routing's relax pass now also
+      slides real nodes within their row slack toward the median of
+      their partners' port columns — a slack row centres over its
+      connections instead of sitting where packing left it (BK only
+      scores width). Free win: arch-system 258→243, arch-state 239→230.
+- [x] Port capacity (2026-08-31): nodes widen to a border cell per edge
+      on their busiest side (post cycle breaking); coincident straights
+      (the LR forward/return pair) now run on parallel cells. The router
+      also refuses identical straights (free-column detour) as a fallback
+      for fixed-port frames.
+- [ ] Still to land: free ports off the title cells; shared edge columns
+      (bundling).
 - [ ] Switch-over: registry routes flowchart/state/class/ER through the
       engine, goldens regenerated, `layout.ts` shrinks to draw fns,
       `layout-elk.ts` deleted.

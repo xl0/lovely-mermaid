@@ -94,9 +94,12 @@ export interface CyclesOptions {
 }
 export interface LayeringOptions {
   strategy?: 'networkSimplex' | 'longestPath'
-  /** stagger a row wider than this (node widths plus gaps, in units) into
-   * two layers — trades height for width; off when absent */
+  /** stagger a row wider than this (estimated rendered row width, in
+   * units) into two layers — trades height for width; off when absent */
   maxWidth?: number
+  /** packing may fill rows up to this budget (a fit target); defaults to
+   * never exceeding the current widest row */
+  packWidth?: number
 }
 export interface OrderingOptions {
   /** `none` keeps declaration order (ports still get cells) */
@@ -121,6 +124,10 @@ export interface LayoutOptions {
   /** Stop after this phase; later ones do not run and the result carries
    * whatever geometry exists (usually none). */
   until?: Phase
+  /** geometry feedback: after a full pass, re-pack the root layers
+   * against the *measured* band extents toward this width and re-run the
+   * later phases (kept only when the measured result does not regress) */
+  squeeze?: number
   cycles?: CyclesOptions
   layering?: LayeringOptions
   ordering?: OrderingOptions
@@ -148,3 +155,22 @@ export interface LayoutResult {
 
 /** Receives one snapshot after import and after each phase, in the engine's internal frame. */
 export type Trace = (snapshot: Snapshot) => void
+
+/** What `layoutBest` aims for. */
+export interface FitOptions {
+  /** target cross-axis extent in the caller's units (a terminal's columns
+   * for a vertical flow); absent = just minimize */
+  width?: number
+  /** most layouts to try (default 12) */
+  budget?: number
+}
+
+/** One layout the candidate loop tried. */
+export interface Candidate {
+  label: string
+  opts: LayoutOptions
+  width: number
+  height: number
+  /** against `FitOptions.width`; absent when no target was given */
+  fits?: boolean
+}

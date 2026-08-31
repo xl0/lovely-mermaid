@@ -80,11 +80,12 @@ describe('compound graphs (recursive)', () => {
     const G = res.compounds.G
     expect(onBorder(G, res.edges.e0.route.at(-1) as Pt)).toBe(true)
     expect(onBorder(G, res.edges.e1.route[0])).toBe(true)
-    // A→G maps to the frame at the top level: a loop off its east border
+    // A→G maps to the frame at the top level: a loop wrapping the frame
     const aa = res.edges.e2.route
-    expect(aa.length).toBe(4)
-    expect(aa[0][0]).toBe(G.x + G.w - 1)
-    expect(aa[1][0]).toBe(G.x + G.w + 1)
+    expect(aa.length).toBe(6)
+    expect(aa[0][1]).toBe(G.y + G.h - 1)
+    expect(aa[2][0]).toBe(G.x + G.w + 1)
+    expect(aa[5][1]).toBe(G.y)
   })
 
   test('a cycle between two frames is broken outside; the reversed edge still runs source→target', () => {
@@ -198,6 +199,25 @@ describe('compound graphs (recursive)', () => {
       altSpacing: alt,
     })
     expect(open.nodes.A.y + open.nodes.A.h).toBeLessThanOrEqual(open.nodes.B.y)
+  })
+
+  test('nested direction flips: down, then right, then down again', () => {
+    const alt = { ...spacing, nodeNode: 1 }
+    const res = layout({
+      ...inputOf(['A>B', 'B>H', 'P>Q', 'X>G'], { G: ['A', 'B', 'H'], H: ['P', 'Q'] }),
+      compounds: [
+        { id: 'G', titleW: 3, dir: 'right' },
+        { id: 'H', parent: 'G', titleW: 3, dir: 'down' },
+      ],
+      altSpacing: alt,
+    })
+    // G flows right, H inside it flows down again; sizes survive the double flip
+    expect(res.nodes.A.y).toBe(res.nodes.B.y)
+    expect(res.nodes.A.x + res.nodes.A.w).toBeLessThanOrEqual(res.nodes.B.x)
+    expect(res.nodes.P.x).toBe(res.nodes.Q.x)
+    expect(res.nodes.P.y + res.nodes.P.h).toBeLessThanOrEqual(res.nodes.Q.y)
+    expect([res.nodes.P.w, res.nodes.P.h]).toEqual([5, 3])
+    expect(inside(res.compounds.G, res.compounds.H)).toBe(true)
   })
 
   test('a right layout with a down subgraph: the child stacks, the rest flows right', () => {

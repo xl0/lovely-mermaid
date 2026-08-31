@@ -20,8 +20,10 @@ export interface View {
 	gapY: number;
 	/** faint cell lines behind the picture */
 	grid: boolean;
+	/** edge label chips (they are unplaced until the labels phase lands) */
+	labels?: boolean;
 }
-export const DEFAULT_VIEW: View = { sx: 10, sy: 20, gapX: 4, gapY: 2, grid: true };
+export const DEFAULT_VIEW: View = { sx: 10, sy: 20, gapX: 4, gapY: 2, grid: true, labels: true };
 
 export interface Rendered {
 	svg: string;
@@ -75,6 +77,10 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	const { sx, sy, gapX, gapY, grid } = view;
 	const fs = Math.max(11, Math.round(Math.min(sy * 0.7, sx * 1.7)));
 	const byId = new Map(snap.nodes.map((n) => [n.id, n]));
+	// a sideways picture (the flat view of an LR/RL layout) bands vertically
+	const flowX =
+		(snap.dir === 'right' || snap.dir === 'left') &&
+		snap.nodes.every((n) => n.kind === 'compound' || (n.x !== undefined && n.y !== undefined));
 	const declIdx = new Map(snap.nodes.map((n, i) => [n.id, i]));
 	const leaves = snap.nodes.filter((n) => n.kind !== 'compound');
 
@@ -114,8 +120,12 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 		});
 		const bs = row.map((n) => box.get(n.id) as Box);
 		bands.push({
-			y0: Math.min(...bs.map((b) => b.y)) - gapY / 2,
-			y1: Math.max(...bs.map((b) => b.y + b.h)) + gapY / 2,
+			y0: flowX
+				? Math.min(...bs.map((b) => b.x)) - gapX / 2
+				: Math.min(...bs.map((b) => b.y)) - gapY / 2,
+			y1: flowX
+				? Math.max(...bs.map((b) => b.x + b.w)) + gapX / 2
+				: Math.max(...bs.map((b) => b.y + b.h)) + gapY / 2,
 			real: row.filter((n) => n.kind !== 'dummy').length,
 			dummy: row.filter((n) => n.kind === 'dummy').length,
 			label: `layer ${keys[li]}`
@@ -237,21 +247,43 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	});
 	const li = (id: string): number => (box.get(id) as Box).li as number;
 	const adjacent = layered.filter((e) => Math.abs(li(e.to) - li(e.from)) === 1);
+	// A result view (`dir` set) carries whole routes: crossings are counted
+	// as actual segment intersections, and the phase diagnostics (back
+	// edges, uncountable long edges) do not apply.
 	let crossings = 0;
-	for (let i = 0; i < adjacent.length; i++) {
-		const e = adjacent[i];
-		const [eu, el] = li(e.from) < li(e.to) ? [e.from, e.to] : [e.to, e.from];
-		for (let j = i + 1; j < adjacent.length; j++) {
-			const f = adjacent[j];
-			const [fu, fl] = li(f.from) < li(f.to) ? [f.from, f.to] : [f.to, f.from];
-			if (li(eu) !== li(fu)) continue;
-			if ((cx(eu) - cx(fu)) * (cx(el) - cx(fl)) < 0) crossings++;
+	if (snap.dir !== undefined) {
+		const hs: [number, number, number, number][] = [];
+		const vs: [number, number, number, number][] = [];
+		snap.edges.forEach((e, i) => {
+			for (let k = 1; k < (e.route?.length ?? 0); k++) {
+				const [ax, ay] = (e.route as Pt[])[k - 1];
+				const [bx, by] = (e.route as Pt[])[k];
+				if (ay === by) hs.push([ay, Math.min(ax, bx), Math.max(ax, bx), i]);
+				else vs.push([ax, Math.min(ay, by), Math.max(ay, by), i]);
+			}
+		});
+		for (const [hy, hx0, hx1, hi] of hs) {
+			for (const [vx, vy0, vy1, vi] of vs) {
+				if (hi !== vi && vx > hx0 && vx < hx1 && hy > vy0 && hy < vy1) crossings++;
+			}
 		}
+	} else {
+		for (let i = 0; i < adjacent.length; i++) {
+			const e = adjacent[i];
+			const [eu, el] = li(e.from) < li(e.to) ? [e.from, e.to] : [e.to, e.from];
+			for (let j = i + 1; j < adjacent.length; j++) {
+				const f = adjacent[j];
+				const [fu, fl] = li(f.from) < li(f.to) ? [f.from, f.to] : [f.to, f.from];
+				if (li(eu) !== li(fu)) continue;
+				if ((cx(eu) - cx(fu)) * (cx(el) - cx(fl)) < 0) crossings++;
+			}
+		}
+		const notDown = layered.filter((e) => e.reversed !== true && li(e.to) <= li(e.from)).length;
+		if (notDown > 0) warnings.push(`${notDown} edge(s) do not point down a layer`);
+		const long =
+			layered.length - adjacent.length - layered.filter((e) => li(e.to) === li(e.from)).length;
+		if (long > 0) warnings.push(`${long} edge(s) span several layers — not counted in crossings`);
 	}
-	const notDown = layered.filter((e) => e.reversed !== true && li(e.to) <= li(e.from)).length;
-	if (notDown > 0) warnings.push(`${notDown} edge(s) do not point down a layer`);
-	const long = layered.length - adjacent.length - layered.filter((e) => li(e.to) === li(e.from)).length;
-	if (long > 0) warnings.push(`${long} edge(s) span several layers — not counted in crossings`);
 	const leafBoxes = leaves.map((n) => box.get(n.id) as Box);
 	let overlaps = 0;
 	for (let i = 0; i < leafBoxes.length; i++) {
@@ -318,11 +350,19 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	// fall on cell boundaries
 	if (grid) push(`<rect x="0" y="0" width="${X(x1)}" height="${Y(y1)}" fill="url(#lab-grid)"/>`);
 	for (const b of bands) {
-		push(
-			`<rect x="${-ML + 4}" y="${Y(b.y0)}" width="${X(layeredX1) + ML - 4 + MR}" height="${Y(b.y1) - Y(b.y0)}" fill="${C.band}" fill-opacity="0.08"/>` +
-				`<text x="${-ML + 8}" y="${Y(b.y0) + 12}" fill="${C.dim}" font-size="10">${b.label}</text>` +
-				`<text x="${X(layeredX1) + 8}" y="${(Y(b.y0) + Y(b.y1)) / 2 + 4}" fill="${C.dim}" font-size="11">${b.real}+${b.dummy}</text>`
-		);
+		if (flowX) {
+			push(
+				`<rect x="${X(b.y0)}" y="${-MT + 4}" width="${X(b.y1) - X(b.y0)}" height="${Y(y1) + MT - 4 + 8}" fill="${C.band}" fill-opacity="0.08"/>` +
+					`<text x="${X(b.y0) + 4}" y="${-MT + 14}" fill="${C.dim}" font-size="10">${b.label}</text>` +
+					`<text x="${(X(b.y0) + X(b.y1)) / 2}" y="${Y(y1) + 10}" text-anchor="middle" fill="${C.dim}" font-size="11">${b.real}+${b.dummy}</text>`
+			);
+		} else {
+			push(
+				`<rect x="${-ML + 4}" y="${Y(b.y0)}" width="${X(layeredX1) + ML - 4 + MR}" height="${Y(b.y1) - Y(b.y0)}" fill="${C.band}" fill-opacity="0.08"/>` +
+					`<text x="${-ML + 8}" y="${Y(b.y0) + 12}" fill="${C.dim}" font-size="10">${b.label}</text>` +
+					`<text x="${X(layeredX1) + 8}" y="${(Y(b.y0) + Y(b.y1)) / 2 + 4}" fill="${C.dim}" font-size="11">${b.real}+${b.dummy}</text>`
+			);
+		}
 	}
 	if (unlayered.some((n) => n.x === undefined)) {
 		push(
@@ -332,10 +372,15 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 	for (const f of frames) {
 		const title = esc(f.n.label ?? f.n.id);
 		const tw = title.length * fs * 0.62 + 8;
+		// an untitled frame (a state `--` region) keeps its border unbroken
+		const chip =
+			title === ''
+				? ''
+				: `<rect x="${PX(f.x) + 6}" y="${PY(f.y) - fs * 0.6}" width="${tw}" height="${fs * 1.2}" fill="${C.labelBg}"/>` +
+					`<text x="${PX(f.x) + 10}" y="${PY(f.y) + fs * 0.35}" fill="${C.frame}">${title}</text>`;
 		push(
 			`<g data-node="${esc(f.n.id)}"><rect ${rectAttrs(f)} fill="${C.frame}" fill-opacity="0.06" stroke="${C.frame}" stroke-dasharray="6 4" pointer-events="all"/>` +
-				`<rect x="${PX(f.x) + 6}" y="${PY(f.y) - fs * 0.6}" width="${tw}" height="${fs * 1.2}" fill="${C.labelBg}"/>` +
-				`<text x="${PX(f.x) + 10}" y="${PY(f.y) + fs * 0.35}" fill="${C.frame}">${title}</text></g>`
+				`${chip}</g>`
 		);
 	}
 	// Nodes first, edges over them: a line cutting through a box is a
@@ -407,7 +452,7 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 		);
 	}
 	snap.edges.forEach((e, i) => {
-		if (e.label === undefined) return;
+		if (e.label === undefined || view.labels === false) return;
 		const l = e.label;
 		const tw = l.text.length * fs * 0.62 + 8;
 		let x: number;

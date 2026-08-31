@@ -82,20 +82,34 @@ function noOverlap(g: LGraph): void {
 }
 
 describe('routing', () => {
-  test('self-loops hang off the east border on reserved columns', () => {
+  test('two edges sharing one column never coincide: the surplus detours', () => {
+    // 3-wide boxes leave one usable port cell, so both edges of the pair
+    // collapse to the same column; the second must jog through a free one
+    const g = routed(['A>B', 'A>B', 'A(3)', 'B(3)'])
+    const r0 = routeOf(g, 'e0')
+    const r1 = routeOf(g, 'e1')
+    const straight = r0.length === 2 ? r0 : r1
+    const detour = r0.length === 2 ? r1 : r0
+    expect(straight.length).toBe(2)
+    expect(detour.length).toBeGreaterThanOrEqual(6)
+    expect(new Set(detour.map(([x]) => x)).size).toBeGreaterThan(1)
+    wellFormed(g)
+  })
+
+  test('self-loops wrap bottom to top around reserved east columns', () => {
     const g = routed(['A>A', 'A>B', 'C>B', 'A>A'])
     const A = g.nodes.find((n) => n.id === 'A') as LGraph['nodes'][number]
     const C = g.nodes.find((n) => n.id === 'C') as LGraph['nodes'][number]
     const loops = g.edges.filter((e) => e.src.node === e.dst.node)
     expect(loops.length).toBe(2)
     const routes = loops.map((e) => e.route as Pt[])
-    // both loop around the east border, the second two columns further out
     for (const r of routes) {
-      expect(r[0][0]).toBe(A.x + A.w - 1)
-      expect(r[1][1]).toBe(r[0][1])
-      expect(r[2][1]).toBe(r[3][1])
+      expect(r.length).toBe(6)
+      expect(r[0][1]).toBe(A.y + A.h - 1) // out the bottom border
+      expect(r[5][1]).toBe(A.y) // in through the top border
+      expect(r[2][0]).toBeGreaterThan(A.x + A.w - 1) // around the east side
     }
-    const outs = routes.map((r) => r[1][0]).sort((a, b) => a - b)
+    const outs = routes.map((r) => r[2][0]).sort((a, b) => a - b)
     expect(outs).toEqual([A.x + A.w + 1, A.x + A.w + 3])
     // the neighbour keeps clear of the reserved columns
     if (C.layer === A.layer && C.x > A.x) expect(C.x).toBeGreaterThan(A.x + A.w + 4)

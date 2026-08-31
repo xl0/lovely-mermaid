@@ -11,7 +11,11 @@
 	type Bag = Record<string, string | number | boolean | undefined>;
 	const schema: Record<string, Record<string, Spec>> = {
 		cycles: { strategy: ['greedy', 'dfs'] },
-		layering: { strategy: ['networkSimplex', 'longestPath'], maxWidth: 'number' },
+		layering: {
+			strategy: ['networkSimplex', 'longestPath'],
+			maxWidth: 'number',
+			packWidth: 'number'
+		},
 		ordering: { strategy: ['sweep', 'none'], thoroughness: 'number', greedySwitch: 'boolean' },
 		placement: { strategy: ['bk', 'networkSimplex'] }
 	};
@@ -36,6 +40,12 @@
 		else next.until = raw as LayoutOptions['until'];
 		value = next;
 	}
+	function setSqueeze(raw: string) {
+		const next = { ...value };
+		if (raw === '') delete next.squeeze;
+		else next.squeeze = Number(raw);
+		value = next;
+	}
 </script>
 
 <div class="options">
@@ -44,6 +54,14 @@
 		<option value="">(run all)</option>
 		{#each PHASES as p}<option value={p}>{p}</option>{/each}
 	</select>
+	<span class="key">squeeze</span>
+	<input
+		type="number"
+		min="10"
+		placeholder="off"
+		value={value.squeeze ?? ''}
+		onchange={(e) => setSqueeze(e.currentTarget.value)}
+	/>
 	{#each phases as phase}
 		{#each Object.entries(schema[phase]) as [key, spec]}
 			<span class="key">{phase}.{key}</span>

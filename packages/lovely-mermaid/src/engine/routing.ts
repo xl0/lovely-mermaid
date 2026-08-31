@@ -17,13 +17,13 @@
  * through a free column. Remaining cycles are broken greedily, tracks are
  * longest paths over the dependencies, straight edges take no track.
  *
- * Before any of that, the long-edge chains are *relaxed*: placement's
- * dummy coordinates fix which gap an edge crosses in each layer, not the
- * exact column, so each chain slides within the slack its neighbours
- * leave and takes the fewest columns its gaps allow. Port dummies join
- * in as one-cell chains anchored on their single inner endpoint, so a
- * frame's ports spread out over what they connect to instead of bunching
- * at the border's left — their pinned order is slack's boundary.
+ * Before any of that, everything is *relaxed* within the slack its row
+ * neighbours leave — order and width never change. Long-edge chains
+ * slide toward their end ports and take the fewest columns their gaps
+ * allow; port dummies anchor on their single inner endpoint, so a
+ * frame's ports spread out over what they connect to; nodes slide toward
+ * the median of their partners' port columns, so a slack row centres
+ * over its connections instead of sitting wherever packing left it.
  *
  * Phase 6, labels, is still a pass-through. `joinRoutes` is plumbing.
  */
@@ -51,8 +51,9 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
     channels.push(routeChannel(segs, col, g.warnings))
   }
   // Band tops from the track counts; nodes sit at the top of their band.
+  // A first-layer self-loop returns through the rows above its box.
   const top: number[] = []
-  let y = 0
+  let y = Math.max(0, ...(g.layers[0] ?? []).map((n) => n.loops ?? 0))
   for (let l = 0; l < L; l++) {
     top.push(y)
     for (const n of g.layers[l]) n.y = y
@@ -83,30 +84,32 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
       e.route = dedupe(pts)
     }
   }
-  // Self-loops: out of the east border, around, back in — the k-th loop of
-  // a node two columns further out, one row higher, on the space `gap`
-  // reserved for it. The arrow lands on the upper row.
+  // Self-loops: a miniature cycle — out of the bottom border, around the
+  // east side on the columns `gap` reserved, back in through the top. The
+  // k-th loop of a node wraps two columns further out and one row wider;
+  // rows beyond the adjacent gap rows may collide with tracks, so stacked
+  // loops carry a warning.
   for (const n of g.nodes) {
     let k = 0
     for (const p of n.ports) {
       for (const e of p.out) {
         if (e.dst.node !== n) continue
-        const r1 = n.y + n.h - 1 - k
-        const r2 = r1 - 1
-        if (r2 < n.y) {
-          g.warnings.push(`edge "${e.id}": no room for another self-loop on "${n.id}"`)
+        const below = n.y + n.h - 1 + (k + 1)
+        const above = n.y - (k + 1)
+        if (above < 0) {
+          g.warnings.push(`edge "${e.id}": no room above "${n.id}" for another self-loop`)
           k++
           continue
         }
-        const border = n.x + n.w - 1
-        const out = border + 2 * (k + 1)
-        e.src.pos = r1 - n.y
-        e.dst.pos = r2 - n.y
+        if (k > 0) g.warnings.push(`edge "${e.id}": stacked self-loops may cross channel tracks`)
+        const out = n.x + n.w - 1 + 2 * (k + 1)
         e.route = [
-          [border, r1],
-          [out, r1],
-          [out, r2],
-          [border, r2],
+          [n.x + e.src.pos, n.y + n.h - 1],
+          [n.x + e.src.pos, below],
+          [out, below],
+          [out, above],
+          [n.x + e.dst.pos, above],
+          [n.x + e.dst.pos, n.y],
         ]
         k++
       }
@@ -127,8 +130,10 @@ function relaxChains(g: LGraph): void {
   const W = Math.max(...g.nodes.map((n) => n.x + Math.max(1, n.w)))
   const chains = new Map<string, LNode[]>()
   for (const n of g.nodes) {
-    if (n.kind === 'port') chains.set(n.id, [n])
-    if (n.kind !== 'dummy') continue
+    if (n.kind !== 'dummy') {
+      chains.set(n.id, [n])
+      continue
+    }
     const list = chains.get(n.origin as string)
     if (list === undefined) chains.set(n.origin as string, [n])
     else list.push(n)
@@ -145,18 +150,36 @@ function relaxChains(g: LGraph): void {
     let moved = false
     for (const key of keys) {
       const ds = chains.get(key) as LNode[]
-      const head = ds[0].ports.find((p) => p.side === 'N')?.in[0]
-      const tail = ds[ds.length - 1].ports.find((p) => p.side === 'S')?.out[0]
-      const headCol = head === undefined ? undefined : head.src.node.x + head.src.pos
-      const tailCol = tail === undefined ? undefined : tail.dst.node.x + tail.dst.pos
-      const srcCol = headCol ?? tailCol ?? ds[0].x
-      const dstCol = tailCol ?? headCol ?? ds[ds.length - 1].x
+      let srcCol: number
+      let dstCol: number
+      if (ds[0].kind === 'node') {
+        // a node goes to the median of its partners' port columns
+        const anchors: number[] = []
+        for (const q of ds[0].ports) {
+          for (const e of [...q.in, ...q.out]) {
+            const other = e.src.node === ds[0] ? e.dst : e.src
+            if (other.node === ds[0]) continue
+            anchors.push(other.node.x + other.pos - q.pos)
+          }
+        }
+        if (anchors.length === 0) continue
+        anchors.sort((x, y) => x - y)
+        srcCol = dstCol = anchors[(anchors.length - 1) >> 1]
+      } else {
+        const head = ds[0].ports.find((p) => p.side === 'N')?.in[0]
+        const tail = ds[ds.length - 1].ports.find((p) => p.side === 'S')?.out[0]
+        const headCol = head === undefined ? undefined : head.src.node.x + head.src.pos
+        const tailCol = tail === undefined ? undefined : tail.dst.node.x + tail.dst.pos
+        srcCol = headCol ?? tailCol ?? ds[0].x
+        dstCol = tailCol ?? headCol ?? ds[ds.length - 1].x
+      }
       const iv = ds.map((d): [number, number] => {
         const row = g.layers[d.layer]
         const a = row[d.order - 1]
         const b = row[d.order + 1]
+        const dw = Math.max(1, d.w)
         const lo = a === undefined ? 0 : a.x + a.w + gap(g.spacing, a, d)
-        const hi = b === undefined ? W - 1 : b.x - gap(g.spacing, d, b) - 1
+        const hi = b === undefined ? W - dw : b.x - gap(g.spacing, d, b) - dw
         return lo > hi ? [d.x, d.x] : [lo, hi]
       })
       let k = 0
@@ -212,8 +235,22 @@ interface Channel {
 function routeChannel(segs: LEdge[], col: (p: LPort) => number, warnings: string[]): Channel {
   const paths = new Map<LEdge, { trunk: Trunk; exitCol: number }[]>()
   const bent = segs.filter((e) => col(e.src) !== col(e.dst))
-  for (const e of segs) if (col(e.src) === col(e.dst)) paths.set(e, [])
-  if (bent.length === 0) return { tracks: 0, first: 0, paths }
+  // Straights, one column each; two straights in one column would coincide
+  // (a forward/return pair on a narrow side, or a doubled edge), so only
+  // the first stays straight — the rest detour through a free column.
+  const byCol = new Map<number, LEdge[]>()
+  for (const e of segs) {
+    if (col(e.src) !== col(e.dst)) continue
+    const list = byCol.get(col(e.src))
+    if (list === undefined) byCol.set(col(e.src), [e])
+    else list.push(e)
+  }
+  const surplus: [number, LEdge[]][] = []
+  for (const [c, list] of byCol) {
+    paths.set(list[0], [])
+    if (list.length > 1) surplus.push([c, list.slice(1)])
+  }
+  if (bent.length === 0 && surplus.length === 0) return { tracks: 0, first: 0, paths }
 
   // Trunks: one per source cell. Edges leaving one cell share a bus with
   // junctions — always one node's edges, so never ambiguous. Edges entering
@@ -248,6 +285,44 @@ function routeChannel(segs: LEdge[], col: (p: LPort) => number, warnings: string
   const forced: [Trunk, Trunk][] = []
   const used = new Set<number>()
   for (const t of trunks) for (const c of [...t.ins, ...t.outs]) used.add(c)
+  for (const [c] of byCol) used.add(c)
+  // each surplus straight becomes its own forced pair of trunks: down,
+  // jog out to a free column, down, jog back in — a visible detour where
+  // an identical straight would have melted into the first one
+  for (const [c, extras] of surplus) {
+    for (const e of extras) {
+      const probe: Trunk = { ins: [c], outs: [c], lo: c, hi: c, track: 0 }
+      const mid = freeColumn(probe, used)
+      if (mid === null) {
+        warnings.push(`routing: no free column for a parallel edge at ${c}; it overlaps`)
+        paths.set(e, [])
+        continue
+      }
+      used.add(mid)
+      const first: Trunk = {
+        ins: [c],
+        outs: [mid],
+        lo: Math.min(c, mid),
+        hi: Math.max(c, mid),
+        track: 0,
+      }
+      const second: Trunk = {
+        ins: [mid],
+        outs: [c],
+        lo: Math.min(c, mid),
+        hi: Math.max(c, mid),
+        track: 0,
+      }
+      trunks.push(first, second)
+      forced.push([first, second])
+      members.set(first, [e])
+      members.set(second, [e])
+      paths.set(e, [
+        { trunk: first, exitCol: mid },
+        { trunk: second, exitCol: c },
+      ])
+    }
+  }
   const critical = (a: Trunk, b: Trunk): boolean => a.outs.some((c) => b.ins.includes(c))
   for (let guard = 0; guard < trunks.length; guard++) {
     let split: [Trunk, Trunk] | null = null

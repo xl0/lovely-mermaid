@@ -18,7 +18,29 @@
 		const d = page.params.data;
 		if (!d) return;
 		unpackHash(d)
-			.then((s) => (src = s))
+			.then((s) => {
+				// new links carry settings as JSON; old ones are the bare source
+				try {
+					const o = JSON.parse(s) as {
+						src?: string;
+						renderer?: 'lovely' | 'mermaid';
+						elkOn?: boolean;
+						elkExtra?: Record<string, string>;
+						dark?: boolean;
+					};
+					if (typeof o === 'object' && o !== null && typeof o.src === 'string') {
+						src = o.src;
+						if (o.renderer !== undefined) renderer = o.renderer;
+						if (o.elkOn !== undefined) elkOn = o.elkOn;
+						if (o.elkExtra !== undefined) elkExtra = o.elkExtra;
+						if (o.dark !== undefined) dark = o.dark;
+						return;
+					}
+				} catch {
+					// plain source
+				}
+				src = s;
+			})
 			.catch(() => (failed = true));
 	});
 
@@ -28,6 +50,7 @@
 	let writeSeq = 0;
 	$effect(() => {
 		const s = src;
+		const payload = JSON.stringify({ src: s, renderer, elkOn, elkExtra, dark });
 		if (s === null) return;
 		const seq = ++writeSeq;
 		if (s.trim() === '') {
@@ -35,7 +58,7 @@
 			history.replaceState(null, '', `${base}/render`);
 			return;
 		}
-		packHash(s).then((h) => {
+		packHash(payload).then((h) => {
 			if (seq === writeSeq) history.replaceState(null, '', `${base}/render/${h}`);
 		});
 	});

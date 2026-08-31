@@ -6,9 +6,15 @@
 
 <script lang="ts">
 	import { diagramKind, type MermaidArt, render } from 'lovely-mermaid';
-	import { type LayoutOptions, type Snapshot, traceEngine } from 'lovely-mermaid-engine';
+	import {
+		type Candidate,
+		type LayoutOptions,
+		type Snapshot,
+		traceEngine,
+		traceEngineFit
+	} from 'lovely-mermaid-engine';
 	import AnsiCanvas from '$lib/AnsiCanvas.svelte';
-	import { snapshotSvg } from '$lib/lab/snapshot-svg';
+	import { DEFAULT_VIEW, snapshotSvg } from '$lib/lab/snapshot-svg';
 	import { defaultThemes, type RoleKey, type RoleStyle } from '$lib/theme';
 
 	type Theme = Record<RoleKey, RoleStyle>;
@@ -19,6 +25,8 @@
 		elkOn = true,
 		elkExtra = {},
 		engineOpts = {},
+		fitWidth = null,
+		showLabels = true,
 		dark = true,
 		theme = defaultThemes.dark
 	}: {
@@ -27,6 +35,10 @@
 		elkOn?: boolean;
 		elkExtra?: Record<string, string>;
 		engineOpts?: LayoutOptions;
+		/** target width in cells; the candidate loop fits to it */
+		fitWidth?: number | null;
+		/** edge label chips in the engine view */
+		showLabels?: boolean;
 		dark?: boolean;
 		theme?: Theme;
 	} = $props();
@@ -37,19 +49,41 @@
 	// the last one, when `until` stops early). A source the engine's
 	// parsers do not know (sequence…) falls back to the rule renderer.
 	const engine = $derived.by(() => {
-		if (renderer !== 'engine') return { pic: null, supported: true, err: '' };
+		if (renderer !== 'engine') return { pic: null, supported: true, err: '', loop: null, ms: 0 };
 		try {
-			const { snapshots } = traceEngine(src, $state.snapshot(engineOpts));
-			if (snapshots.length === 0) return { pic: null, supported: false, err: '' };
+			const opts = $state.snapshot(engineOpts);
+			const t0 = performance.now();
+			let snapshots: Snapshot[];
+			let loop: { chosen: string; candidates: Candidate[] } | null = null;
+			if (fitWidth !== null && fitWidth > 0) {
+				const r = traceEngineFit(src, { width: fitWidth }, opts);
+				if (r === null) return { pic: null, supported: false, err: '', loop: null, ms: 0 };
+				snapshots = r.snapshots;
+				loop = { chosen: r.chosen, candidates: r.candidates };
+			} else {
+				const r = traceEngine(src, opts);
+				snapshots = r.snapshots;
+			}
+			const ms = performance.now() - t0;
+			if (snapshots.length === 0)
+				return { pic: null, supported: false, err: '', loop: null, ms: 0 };
 			const snap =
 				(snapshots.findLast((q: Snapshot) => q.title === 'labels · flat') ??
 					snapshots.at(-1)) as Snapshot;
-			return { pic: snapshotSvg(snap), supported: true, err: '' };
+			return {
+				pic: snapshotSvg(snap, { ...DEFAULT_VIEW, labels: showLabels }),
+				supported: true,
+				err: '',
+				loop,
+				ms
+			};
 		} catch (e) {
 			return {
 				pic: null,
 				supported: true,
-				err: `engine crashed: ${e instanceof Error ? e.message : e}`
+				err: `engine crashed: ${e instanceof Error ? e.message : e}`,
+				loop: null,
+				ms: 0
 			};
 		}
 	});
@@ -151,11 +185,10 @@
 		renderer === 'mermaid' ? mmSize.h : enginePic !== null ? enginePic.h : artH
 	);
 
-	// Fit on first size, refit whenever the layout inputs change.
+	// Fit on the first size and when the world itself changes (another
+	// renderer); option tweaks keep the camera where the user put it.
 	let fitFor = '';
-	const fitKey = $derived(
-		`${renderer}${elkOn ? '+elk' : ''}${JSON.stringify(elkExtra)}${JSON.stringify(engineOpts)}`
-	);
+	const fitKey = $derived(`${renderer}`);
 	$effect(() => {
 		if (fitFor !== fitKey && worldW > 0 && vpW > 0) {
 			fitFor = fitKey;
@@ -319,9 +352,15 @@
 		{/if}
 		{#if enginePic !== null}
 			<span class="dim">{enginePic.stats.width}×{enginePic.stats.height}</span>
+			<span class="dim">{engine.ms < 10 ? engine.ms.toFixed(1) : Math.round(engine.ms)}ms</span>
 		{/if}
 		{#if enginePic !== null && enginePic.warnings.length > 0}
 			<span class="err">⚠ {enginePic.warnings.join(' · ')}</span>
+		{/if}
+		{#if engine.loop !== null && enginePic !== null}
+			<span class="dim" title={engine.loop.candidates
+					.map((c) => `${c.label}: ${c.width}×${c.height}${c.fits === false ? ' ✗' : ''}`)
+					.join('\n')}>{engine.loop.chosen} · {engine.loop.candidates.length} tried</span>
 		{/if}
 		{#if renderer === 'engine' && !engine.supported}
 			<span class="dim">rule layout (no engine for this kind)</span>

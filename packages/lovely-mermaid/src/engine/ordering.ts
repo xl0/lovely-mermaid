@@ -38,13 +38,7 @@ const mid = (a: Ratio, b: Ratio): Ratio => [a[0] * b[1] + b[0] * a[1], 2 * a[1] 
 
 export function orderNodes(g0: LGraph, opts: OrderingOptions, trace?: OrderTrace): LGraph {
   const g = cloneGraph(g0)
-  for (const n of g.nodes) {
-    for (const p of n.ports) {
-      const e = p.in[0] ?? p.out[0]
-      if (e !== undefined && e.src.node === e.dst.node) continue // self-loops keep their east side
-      p.side = p.out.length > 0 ? 'S' : 'N'
-    }
-  }
+  for (const n of g.nodes) for (const p of n.ports) p.side = p.out.length > 0 ? 'S' : 'N'
   if (g.layers.length === 0) return g
   const initial = (): State => ({
     layers: g.layers.map((row) => [...row]),
@@ -165,10 +159,20 @@ function sortPorts(s: State, free: number, fixed: number): void {
   for (const n of s.layers[fixed]) sortSide(facingFixed(n), back)
 }
 
-/** Sort a side's ports by `key`, unless any is fixed: then by position. */
+/** A self-loop's end: it wraps around the east side, so it sorts last. */
+const loopEnd = (p: LPort): boolean => {
+  const e = p.in[0] ?? p.out[0]
+  return e !== undefined && e.src.node === e.dst.node
+}
+
+/** Sort a side's ports by `key`, unless any is fixed: then by position.
+ * Self-loop ends go last either way, nearest their east-side wrap. */
 function sortSide(ps: LPort[], key: (p: LPort) => number): void {
   if (ps.some((p) => p.fixed === true)) byPos(ps)
-  else ps.sort((a, b) => key(a) - key(b))
+  else {
+    const k = (p: LPort): number => (loopEnd(p) ? Number.POSITIVE_INFINITY : key(p))
+    ps.sort((a, b) => k(a) - k(b))
+  }
 }
 function byPos(ps: LPort[]): LPort[] {
   if (ps.some((p) => p.fixed === true)) ps.sort((a, b) => a.pos - b.pos)

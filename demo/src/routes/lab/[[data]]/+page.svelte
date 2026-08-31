@@ -15,7 +15,14 @@
 		type SPort
 	} from '$lib/lab/snapshot';
 	import { DEFAULT_VIEW, type Rendered, snapshotSvg, type View } from '$lib/lab/snapshot-svg';
-	import { type LayoutInput, type LayoutOptions, layout, prepare } from 'lovely-mermaid-engine';
+	import {
+		type Candidate,
+		type LayoutInput,
+		type LayoutOptions,
+		layout,
+		layoutBest,
+		prepare
+	} from 'lovely-mermaid-engine';
 
 	// The layout lab: [generate] parses the mermaid source into the engine's
 	// input; from then on the engine re-runs live whenever an option changes,
@@ -71,11 +78,13 @@
 					opts?: LayoutOptions;
 					text: string;
 					view: Partial<View>;
+					fit?: number | null;
 				};
 				src = o.src ?? DEFAULT_SRC;
 				opts = typeof o.opts === 'object' && o.opts !== null ? o.opts : {};
 				text = o.text;
 				view = { ...DEFAULT_VIEW, ...o.view };
+				fitW = o.fit ?? null;
 			})
 			.finally(() => (loaded = true));
 	} else {
@@ -83,7 +92,7 @@
 	}
 	let writeSeq = 0;
 	$effect(() => {
-		const s = JSON.stringify({ src, opts, text, view });
+		const s = JSON.stringify({ src, opts, text, view, fit: fitW });
 		if (!loaded) return;
 		const seq = ++writeSeq;
 		const t = setTimeout(() => {
@@ -104,15 +113,35 @@
 		}
 		parseWarnings = p.graph.warnings;
 		input = p.input;
+		fitted = false; // a new diagram gets a fresh fit
 	}
+	let layoutMs = $state<number | null>(null);
+	// With a fit target the candidate loop runs and the winner is traced;
+	// its table lands below the options, a click adopts that candidate.
+	let fitW = $state<number | null>(null);
+	let candidates = $state<Candidate[] | null>(null);
+	let chosen = $state<LayoutOptions | null>(null);
 	// The engine runs whenever the input or any option changes.
 	$effect(() => {
 		const inp = $state.snapshot(input);
 		const o = $state.snapshot(opts);
+		const target = fitW;
 		if (inp === null) return;
 		try {
 			const snaps: Snapshot[] = [];
-			const res = layout(inp, o, (s) => snaps.push(s));
+			const t0 = performance.now();
+			let res: ReturnType<typeof layout>;
+			if (target !== null && target > 0) {
+				const r = layoutBest(inp, o, { width: target }, (s) => snaps.push(s));
+				res = r.result;
+				candidates = r.candidates;
+				chosen = r.chosen;
+			} else {
+				res = layout(inp, o, (s) => snaps.push(s));
+				candidates = null;
+				chosen = null;
+			}
+			layoutMs = performance.now() - t0;
 			const next = groupSnapshots(snaps);
 			groups = next;
 			genErr = [...parseWarnings, ...res.warnings].join('; ');
@@ -203,16 +232,21 @@
 		tx = (r.width - good.w * s) / 2;
 		ty = (r.height - good.h * s) / 2;
 	}
-	// Refit only when the picture's size or the panel width changes — not on
-	// every edit, which replaces `good` and would snap the view back; fit()
-	// reads `good` and writes the camera, so it runs untracked.
-	const picW = $derived(good?.w ?? 0);
-	const picH = $derived(good?.h ?? 0);
+	// Refit only on the first picture, a new generate, or a panel resize —
+	// never on option changes or phase steps, so the camera stays where
+	// the user put it; fit() reads `good` and writes the camera, so it
+	// runs untracked.
+	let fitted = $state(false);
+	const hasPic = $derived(good !== null && good !== undefined);
 	$effect(() => {
-		void picW;
-		void picH;
 		void panelW;
-		untrack(fit);
+		if (hasPic && fitted) untrack(fit);
+	});
+	$effect(() => {
+		if (hasPic && !fitted) {
+			fitted = true;
+			untrack(fit);
+		}
 	});
 
 	// --- resizable side panel
@@ -308,6 +342,39 @@
 		<h1><span class="accent">lovely-mermaid</span> <span class="dim">/ lab</span></h1>
 		<textarea class="src" bind:value={src} spellcheck="false" aria-label="Mermaid source"></textarea>
 		<Options bind:value={opts} />
+		<div class="row view">
+			<label
+				>fit <input
+					type="number"
+					min="20"
+					placeholder="off"
+					value={fitW ?? ''}
+					onchange={(e) => {
+						const v = e.currentTarget.value;
+						fitW = v === '' ? null : Number(v);
+					}}
+				/></label
+			>
+			{#if candidates !== null}<span class="dim">{candidates.length} tried</span>{/if}
+		</div>
+		{#if candidates !== null}
+			<div class="cands">
+				{#each candidates as c (c.label)}
+					<button
+						class="ghost cand"
+						class:active={c.opts === chosen}
+						title="adopt these options"
+						onclick={() => {
+							opts = JSON.parse(JSON.stringify(c.opts)) as LayoutOptions;
+							fitW = null;
+						}}
+					>
+						{c.opts === chosen ? '→' : ' '}
+						{c.label} · {c.width}×{c.height}{c.fits === true ? ' ✓' : ''}
+					</button>
+				{/each}
+			</div>
+		{/if}
 		<div class="row wrap">
 			<button class="ghost" onclick={generate}>[generate]</button>
 			{#each groups as g, i}
@@ -337,6 +404,11 @@
 			<label>gapX <input type="number" min="0" bind:value={view.gapX} /></label>
 			<label>gapY <input type="number" min="0" bind:value={view.gapY} /></label>
 			<label>grid <input type="checkbox" bind:checked={view.grid} /></label>
+			<label>labels <input
+					type="checkbox"
+					checked={view.labels ?? true}
+					onchange={(e) => (view.labels = e.currentTarget.checked)}
+				/></label>
 			<button class="ghost" onclick={() => navigator.clipboard.writeText(location.href)}>[copy link]</button>
 		</div>
 		<Editor bind:value={text} bind:this={editor} onCaret={(s) => (caret = s)} />
@@ -377,6 +449,9 @@
 			{#if good}
 				<span class="dim">
 					{#each Object.entries(good.stats) as [k, v]}{k}: {v} · {/each}
+					{#if layoutMs !== null}layout: {layoutMs < 10
+							? layoutMs.toFixed(1)
+							: Math.round(layoutMs)}ms{/if}
 				</span>
 				{#each good.warnings as w}<span class="warn">{w}</span>{/each}
 			{/if}
@@ -554,5 +629,19 @@
 		word-break: break-all;
 		color: var(--gold);
 		flex-basis: 100%;
+	}
+	.cands {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.1rem;
+		margin: 0.2rem 0 0.4rem;
+		font-size: 0.85rem;
+	}
+	.cand {
+		white-space: pre;
+	}
+	.cand.active {
+		color: var(--accent);
 	}
 </style>

@@ -16,9 +16,11 @@ import { parseClass } from './diagrams/class.ts'
 import { parseEr } from './diagrams/er.ts'
 import { parseGraph } from './diagrams/flowchart.ts'
 import { parseState } from './diagrams/state.ts'
-import { layout } from './engine/index.ts'
+import { layout, layoutBest } from './engine/index.ts'
 import type { Snapshot } from './engine/snapshot.ts'
 import type {
+  Candidate,
+  FitOptions,
   InputCompound,
   InputLabel,
   InputNode,
@@ -35,9 +37,15 @@ import { drawBox, drawClassBox, half, headGlyph, MAX_CANVAS_CELLS, sat } from '.
 import type { MermaidArt } from './types.ts'
 import { stringWidth } from './width.ts'
 
-export { layout } from './engine/index.ts'
+export { layout, layoutBest } from './engine/index.ts'
 export type { Pt, SEdge, SNode, Snapshot, SPort } from './engine/snapshot.ts'
-export type { LayoutInput, LayoutOptions, Phase } from './engine/types.ts'
+export type {
+  Candidate,
+  FitOptions,
+  LayoutInput,
+  LayoutOptions,
+  Phase,
+} from './engine/types.ts'
 export { PHASES } from './engine/types.ts'
 
 /**
@@ -81,7 +89,13 @@ export function importGraph(graph: Graph): { input: LayoutInput; lines: string[]
       const w = Math.max(1, ...n.sections.flat().map(stringWidth)) + 4
       const filled = n.sections.filter((s) => s.length > 0).length
       const h = n.sections.reduce((s, sec) => s + sec.length, 0) + sat(filled, 1) + 2
-      nodes.push({ id: `n${i}`, label: n.label, w, h, parent })
+      // the compartment text as the lab label, so the box's size reads
+      // as what it is (the engine never looks at labels)
+      const label = n.sections
+        .filter((sec) => sec.length > 0)
+        .map((sec) => sec.join('\n'))
+        .join('\n⎯⎯⎯\n')
+      nodes.push({ id: `n${i}`, label, w, h, parent })
       return
     }
     nodes.push({
@@ -245,4 +259,34 @@ export function traceEngine(
   const snapshots: Snapshot[] = []
   const art = renderEngine(src, opts, (s) => snapshots.push(s))
   return { snapshots, art }
+}
+
+/** `traceEngine` through the candidate loop: the winner's snapshots and
+ * art, plus what was tried. `null` when the source does not parse. */
+export function traceEngineFit(
+  src: string,
+  fit: FitOptions,
+  opts: LayoutOptions = {},
+): {
+  snapshots: Snapshot[]
+  art: MermaidArt | null
+  candidates: Candidate[]
+  chosen: string
+} | null {
+  const p = prepare(src)
+  if (p === null) return null
+  const snapshots: Snapshot[] = []
+  const { result, candidates, chosen } = layoutBest(p.input, opts, fit, (s) => snapshots.push(s))
+  const canvas = drawLayout(p.graph, result, p.lines)
+  const art =
+    canvas === null
+      ? null
+      : {
+          ...canvas.toLines(),
+          classDefs: p.graph.classDefs,
+          warnings: [...p.graph.warnings, ...result.warnings],
+        }
+  const label =
+    candidates.find((c) => c.opts === chosen)?.label ?? `${candidates.length} candidates`
+  return { snapshots, art, candidates, chosen: label }
 }

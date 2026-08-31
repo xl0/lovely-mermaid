@@ -27,6 +27,47 @@ describe('layering', () => {
     }
   })
 
+  test('packing keeps every invariant on random capped graphs', () => {
+    let seed = 20260831
+    const rand = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      return seed % n
+    }
+    for (let trial = 0; trial < 30; trial++) {
+      const n = 5 + rand(8)
+      const ids = Array.from({ length: n }, (_, i) => `N${i}(${4 + rand(18)})`)
+      const items: string[] = [...ids]
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          if (rand(3) === 0) items.push(`N${i}>N${j}${rand(4) === 0 ? ':2' : ''}`)
+        }
+      }
+      const cap = rand(2) === 0 ? undefined : 25 + rand(40)
+      const g = assignLayers(graph(items), { maxWidth: cap })
+      for (const e of g.edges) {
+        expect(e.dst.node.layer - e.src.node.layer).toBeGreaterThanOrEqual(e.minLen)
+      }
+      if (cap !== undefined) {
+        for (const row of g.layers) {
+          if (row.length < 2) continue
+          const w = row.reduce((t, q) => t + q.w, 0) + 3 * (row.length - 1)
+          expect(w).toBeLessThanOrEqual(cap)
+        }
+      }
+      // no empty rows survive packing's compaction unless a span needs them
+      for (const [l, row] of g.layers.entries()) {
+        if (row.length > 0) continue
+        const needed = g.edges.some(
+          (e) =>
+            e.src.node.layer < l &&
+            l < e.dst.node.layer &&
+            e.dst.node.layer - e.src.node.layer - 1 < e.minLen,
+        )
+        expect(needed).toBe(true)
+      }
+    }
+  })
+
   test('maxWidth prefers to move nodes whose edges go on down', () => {
     // E and F continue downward; A and B are sinks — E and F should move,
     // keeping their out-edges short
