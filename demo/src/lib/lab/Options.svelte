@@ -11,7 +11,7 @@
 	type Bag = Record<string, string | number | boolean | undefined>;
 	const schema: Record<string, Record<string, Spec>> = {
 		cycles: { strategy: ['greedy', 'dfs'] },
-		layering: { strategy: ['networkSimplex', 'longestPath'] },
+		layering: { strategy: ['networkSimplex', 'longestPath'], maxWidth: 'number' },
 		ordering: { strategy: ['sweep', 'none'], thoroughness: 'number', greedySwitch: 'boolean' },
 		placement: { strategy: ['bk', 'networkSimplex'] }
 	};

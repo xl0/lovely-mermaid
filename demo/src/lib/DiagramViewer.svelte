@@ -6,29 +6,56 @@
 
 <script lang="ts">
 	import { diagramKind, type MermaidArt, render } from 'lovely-mermaid';
+	import { type LayoutOptions, type Snapshot, traceEngine } from 'lovely-mermaid-engine';
 	import AnsiCanvas from '$lib/AnsiCanvas.svelte';
+	import { snapshotSvg } from '$lib/lab/snapshot-svg';
 	import { defaultThemes, type RoleKey, type RoleStyle } from '$lib/theme';
 
 	type Theme = Record<RoleKey, RoleStyle>;
 
 	let {
 		src,
-		renderer = 'lovely',
+		renderer = 'engine',
 		elkOn = true,
 		elkExtra = {},
+		engineOpts = {},
 		dark = true,
 		theme = defaultThemes.dark
 	}: {
 		src: string;
-		renderer?: 'lovely' | 'mermaid';
+		renderer?: 'engine' | 'lovely' | 'mermaid';
 		elkOn?: boolean;
 		elkExtra?: Record<string, string>;
+		engineOpts?: LayoutOptions;
 		dark?: boolean;
 		theme?: Theme;
 	} = $props();
 
 	const id = ++instances;
-	const baseArt = $derived(render(src));
+	// The in-house engine, drawn with the lab's snapshot renderer for a
+	// consistent look: the final flat snapshot of the whole hierarchy (or
+	// the last one, when `until` stops early). A source the engine's
+	// parsers do not know (sequence…) falls back to the rule renderer.
+	const engine = $derived.by(() => {
+		if (renderer !== 'engine') return { pic: null, supported: true, err: '' };
+		try {
+			const { snapshots } = traceEngine(src, $state.snapshot(engineOpts));
+			if (snapshots.length === 0) return { pic: null, supported: false, err: '' };
+			const snap =
+				(snapshots.findLast((q: Snapshot) => q.title === 'labels · flat') ??
+					snapshots.at(-1)) as Snapshot;
+			return { pic: snapshotSvg(snap), supported: true, err: '' };
+		} catch (e) {
+			return {
+				pic: null,
+				supported: true,
+				err: `engine crashed: ${e instanceof Error ? e.message : e}`
+			};
+		}
+	});
+	const baseArt = $derived(
+		renderer === 'lovely' || (renderer === 'engine' && !engine.supported) ? render(src) : null
+	);
 	const elkSupported = $derived(
 		['flowchart', 'state', 'class', 'er'].includes(diagramKind(src) ?? '')
 	);
@@ -60,8 +87,21 @@
 				}
 			});
 	});
-	const elkPending = $derived(elkOn && elkArt === null && elkErr === '' && elkSupported);
-	const art = $derived(elkPending ? null : elkOn && elkArt !== null ? elkArt : baseArt);
+	const elkPending = $derived(
+		renderer === 'lovely' && elkOn && elkArt === null && elkErr === '' && elkSupported
+	);
+	const art = $derived(
+		renderer === 'engine'
+			? engine.supported
+				? null
+				: baseArt
+			: elkPending
+				? null
+				: elkOn && elkArt !== null
+					? elkArt
+					: baseArt
+	);
+	const enginePic = $derived(renderer === 'engine' && engine.supported ? engine.pic : null);
 
 	let mmSvg = $state('');
 	let mmErr = $state('');
@@ -104,12 +144,18 @@
 	let vpH = $state(0);
 	const artW = $derived(art === null ? 0 : (art.width + 2) * CELL * 0.6);
 	const artH = $derived(art === null ? 0 : (art.plain.length + 2) * CELL);
-	const worldW = $derived(renderer === 'mermaid' ? mmSize.w : artW);
-	const worldH = $derived(renderer === 'mermaid' ? mmSize.h : artH);
+	const worldW = $derived(
+		renderer === 'mermaid' ? mmSize.w : enginePic !== null ? enginePic.w : artW
+	);
+	const worldH = $derived(
+		renderer === 'mermaid' ? mmSize.h : enginePic !== null ? enginePic.h : artH
+	);
 
 	// Fit on first size, refit whenever the layout inputs change.
 	let fitFor = '';
-	const fitKey = $derived(`${renderer}${elkOn ? '+elk' : ''}${JSON.stringify(elkExtra)}`);
+	const fitKey = $derived(
+		`${renderer}${elkOn ? '+elk' : ''}${JSON.stringify(elkExtra)}${JSON.stringify(engineOpts)}`
+	);
 	$effect(() => {
 		if (fitFor !== fitKey && worldW > 0 && vpW > 0) {
 			fitFor = fitKey;
@@ -243,10 +289,22 @@
 				{@html mmSvg}
 			</div>
 		{/if}
+	{:else if enginePic !== null}
+		<div
+			class="mm-layer"
+			style="transform: translate({tx}px, {ty}px) scale({s}); width: {enginePic.w}px; height: {enginePic.h}px"
+		>
+			<!-- eslint-disable-next-line svelte/no-at-html-tags -- our own snapshot SVG -->
+			{@html enginePic.svg}
+		</div>
 	{:else if elkPending}
 		<div class="note dim">laying out…</div>
 	{:else if art === null}
-		<div class="note err">render(src) → null — nothing to draw for this source.</div>
+		<div class="note err">
+			{renderer === 'engine' && engine.err !== ''
+				? engine.err
+				: 'render(src) → null — nothing to draw for this source.'}
+		</div>
 	{:else}
 		<AnsiCanvas {art} {theme} {dark} cell={CELL} {s} {tx} {ty} />
 	{/if}
@@ -256,8 +314,17 @@
 	{/if}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="badges" onpointerdown={(e) => e.stopPropagation()}>
-		{#if art !== null && renderer === 'lovely'}
+		{#if art !== null && renderer !== 'mermaid'}
 			<span class="dim">{art.width}×{art.plain.length}</span>
+		{/if}
+		{#if enginePic !== null}
+			<span class="dim">{enginePic.stats.width}×{enginePic.stats.height}</span>
+		{/if}
+		{#if enginePic !== null && enginePic.warnings.length > 0}
+			<span class="err">⚠ {enginePic.warnings.join(' · ')}</span>
+		{/if}
+		{#if renderer === 'engine' && !engine.supported}
+			<span class="dim">rule layout (no engine for this kind)</span>
 		{/if}
 		{#if elkErr !== ''}
 			<span class="err">⚠ {elkErr} (rule fallback)</span>
@@ -267,7 +334,7 @@
 		<button class="ghost" onclick={fit}>[fit]</button>
 	</div>
 
-	{#if renderer === 'lovely' && art && artW > 0}
+	{#if renderer !== 'mermaid' && art && artW > 0}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="minimap"

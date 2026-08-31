@@ -248,7 +248,7 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 			if ((cx(eu) - cx(fu)) * (cx(el) - cx(fl)) < 0) crossings++;
 		}
 	}
-	const notDown = layered.filter((e) => li(e.to) <= li(e.from)).length;
+	const notDown = layered.filter((e) => e.reversed !== true && li(e.to) <= li(e.from)).length;
 	if (notDown > 0) warnings.push(`${notDown} edge(s) do not point down a layer`);
 	const long = layered.length - adjacent.length - layered.filter((e) => li(e.to) === li(e.from)).length;
 	if (long > 0) warnings.push(`${long} edge(s) span several layers — not counted in crossings`);

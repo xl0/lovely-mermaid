@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { base } from '$app/paths';
 	import { SvelteSet } from 'svelte/reactivity';
+	import type { LayoutOptions } from 'lovely-mermaid-engine';
 	import DiagramViewer from '$lib/DiagramViewer.svelte';
+	import Options from '$lib/lab/Options.svelte';
 	import { defaultThemes } from '$lib/theme';
 
 	// The repo's standing test corpus, inlined at build time.
@@ -14,8 +16,10 @@
 		.map(([path, src]) => ({ name: path.split('/').pop()!.replace(/\.mmd$/, ''), src }))
 		.sort((a, b) => a.name.localeCompare(b.name));
 
-	let renderer = $state<'lovely' | 'mermaid'>('lovely');
+	let renderer = $state<'engine' | 'lovely' | 'mermaid'>('engine');
 	let elkOn = $state(true);
+	let engineOpts = $state<LayoutOptions>({});
+	let engineMenuOpen = $state(false);
 	let dark = $state(true);
 	$effect(() => {
 		document.body.classList.toggle('light', !dark);
@@ -64,7 +68,10 @@
 
 <svelte:window
 	onkeydown={(e) => {
-		if (e.key === 'Escape') elkMenuOpen = false;
+		if (e.key === 'Escape') {
+			elkMenuOpen = false;
+			engineMenuOpen = false;
+		}
 	}}
 />
 
@@ -76,21 +83,49 @@
 		<span class="spacer"></span>
 		<button
 			class="ghost"
-			class:active={renderer === 'mermaid'}
-			onclick={() => (renderer = renderer === 'lovely' ? 'mermaid' : 'lovely')}
-			>[mermaid]</button
+			class:active={renderer === 'engine'}
+			onclick={() => (renderer = 'engine')}>[engine]</button
 		>
-		<button class="ghost" class:active={elkOn} onclick={() => (elkOn = !elkOn)}>[elk]</button>
 		<button
 			class="ghost"
-			class:active={elkMenuOpen}
-			disabled={!elkOn || renderer !== 'lovely'}
-			onclick={() => (elkMenuOpen = !elkMenuOpen)}>[opts]</button
+			class:active={renderer === 'lovely'}
+			onclick={() => (renderer = 'lovely')}>[legacy]</button
+		>
+		<button
+			class="ghost"
+			class:active={renderer === 'mermaid'}
+			onclick={() => (renderer = 'mermaid')}>[mermaid]</button
+		>
+		<button
+			class="ghost"
+			class:active={elkOn}
+			disabled={renderer !== 'lovely'}
+			onclick={() => (elkOn = !elkOn)}>[elk]</button
+		>
+		<button
+			class="ghost"
+			class:active={engineMenuOpen || elkMenuOpen}
+			disabled={renderer === 'mermaid' || (renderer === 'lovely' && !elkOn)}
+			onclick={() => {
+				if (renderer === 'engine') engineMenuOpen = !engineMenuOpen;
+				else elkMenuOpen = !elkMenuOpen;
+			}}>[opts]</button
 		>
 		<button class="ghost" onclick={() => (dark = !dark)}>[{dark ? 'light' : 'dark'}]</button>
 	</div>
 
-	{#if elkMenuOpen}
+	{#if engineMenuOpen && renderer === 'engine'}
+		<div class="menu" role="dialog" aria-label="engine layout options" tabindex="-1">
+			<div class="menu-title">engine options</div>
+			<Options bind:value={engineOpts} />
+			<button
+				class="ghost elk-reset"
+				disabled={Object.keys(engineOpts).length === 0}
+				onclick={() => (engineOpts = {})}>[reset]</button
+			>
+		</div>
+	{/if}
+	{#if elkMenuOpen && renderer === 'lovely'}
 		<div class="menu" role="dialog" aria-label="ELK layout options" tabindex="-1">
 			<div class="menu-title">elk options</div>
 			{#each ELK_CHOICES as c}
@@ -130,7 +165,7 @@
 					>
 				</h2>
 				<div class="frame" class:split={srcOpen.has(d.name)}>
-					<DiagramViewer src={d.src} {renderer} {elkOn} {elkExtra} {dark} {theme} />
+					<DiagramViewer src={d.src} {renderer} {elkOn} {elkExtra} {engineOpts} {dark} {theme} />
 					{#if srcOpen.has(d.name)}
 						<pre class="src">{d.src}</pre>
 					{/if}

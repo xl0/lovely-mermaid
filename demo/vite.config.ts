@@ -15,7 +15,17 @@ const linked = [
 	.map((p) => realpathSync(p));
 
 export default defineConfig({
-	plugins: [sveltekit()],
+	plugins: [
+		sveltekit(),
+		{
+			// the aliased engine source lives outside this root; make sure the
+			// dev server watches it so open tabs reload on engine edits
+			name: 'watch-lovely-mermaid-src',
+			configureServer(server) {
+				server.watcher.add(fileURLToPath(new URL('../packages/lovely-mermaid/src', import.meta.url)));
+			}
+		}
+	],
 	resolve: {
 		alias: {
 			// layout-elk.ts lives in the aliased lovely-mermaid source outside
