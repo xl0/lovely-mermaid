@@ -1,0 +1,254 @@
+stateDiagram-v2
+    direction LR
+
+    [*] --> RuntimeCreation
+
+    state "Create cwd-bound runtime" as RuntimeCreation {
+        [*] --> LoadSettings
+        LoadSettings --> ResolveProjectTrust
+        ResolveProjectTrust --> DiscoverResources
+        DiscoverResources --> LoadExtensions
+        LoadExtensions --> RegisterProviders
+        RegisterProviders --> RefreshLocalCatalogs
+        RefreshLocalCatalogs --> ResolveSessionModel
+        ResolveSessionModel --> RestoreThinkingLevel
+        RestoreThinkingLevel --> BuildToolRegistry
+        BuildToolRegistry --> BuildSystemPrompt
+        BuildSystemPrompt --> HydrateSessionContext
+        HydrateSessionContext --> BindExtensionCore
+        BindExtensionCore --> [*]
+    }
+
+    RuntimeCreation --> Idle : session_start
+    state "Idle and accepting input" as Idle
+
+    Idle --> PromptPreflight : prompt
+
+    state "Prompt preflight" as PromptPreflight {
+        [*] --> CheckExtensionCommand
+        CheckExtensionCommand --> CommandOutcome
+        state CommandOutcome <<choice>>
+        CommandOutcome --> ExecuteCommand : registered command
+        CommandOutcome --> EmitInputHook : normal input
+        ExecuteCommand --> PreflightHandled
+        EmitInputHook --> InputOutcome
+        state InputOutcome <<choice>>
+        InputOutcome --> PreflightHandled : handled
+        InputOutcome --> ExpandPrompt : continue or transform
+        ExpandPrompt --> ExpandSkill
+        ExpandSkill --> ExpandTemplate
+        ExpandTemplate --> StreamingCheck
+        StreamingCheck --> QueueBehavior
+        state QueueBehavior <<choice>>
+        QueueBehavior --> QueueSteering : active and steer
+        QueueBehavior --> QueueFollowUp : active and follow-up
+        QueueBehavior --> RejectMissingBehavior : active and unspecified
+        QueueBehavior --> ValidateModel : inactive
+        ValidateModel --> ValidateAuthentication
+        ValidateAuthentication --> CheckPreTurnCompaction
+        CheckPreTurnCompaction --> BeforeAgentStartHook
+        BeforeAgentStartHook --> AssembleInputMessages
+        AssembleInputMessages --> PreflightAccepted
+        PreflightHandled --> [*]
+        QueueSteering --> [*]
+        QueueFollowUp --> [*]
+        RejectMissingBehavior --> [*]
+        PreflightAccepted --> [*]
+    }
+
+    PromptPreflight --> Idle : handled, queued, or rejected
+    PromptPreflight --> Running : accepted new run
+
+    state "Active agent run" as Running {
+        state "Provider and tool loop" as AgentLoop {
+            [*] --> AgentStart
+            AgentStart --> StartTurn
+            StartTurn --> Turn
+
+            state "One assistant turn" as Turn {
+                [*] --> RefreshTurnSnapshot
+                RefreshTurnSnapshot --> TransformContextHook
+                TransformContextHook --> ConvertToLlmMessages
+                ConvertToLlmMessages --> FilterBlockedImages
+                FilterBlockedImages --> ResolveRequestAuth
+                ResolveRequestAuth --> MergeAttributionHeaders
+                MergeAttributionHeaders --> BeforeProviderHeadersHook
+                BeforeProviderHeadersHook --> BeforeProviderRequestHook
+                BeforeProviderRequestHook --> ProviderStreaming
+                ProviderStreaming --> AfterProviderResponseHook
+                AfterProviderResponseHook --> ResponseOutcome
+
+                state ResponseOutcome <<choice>>
+                ResponseOutcome --> ResponseError : error or abort
+                ResponseOutcome --> TurnComplete : final response
+                ResponseOutcome --> ResolveToolCalls : tool use
+
+                ResolveToolCalls --> ValidateToolArguments
+                ValidateToolArguments --> ToolPreparationOutcome
+                state ToolPreparationOutcome <<choice>>
+                ToolPreparationOutcome --> ErrorToolResult : unknown or invalid
+                ToolPreparationOutcome --> BeforeToolCallHook : valid
+                BeforeToolCallHook --> ToolPermissionOutcome
+                state ToolPermissionOutcome <<choice>>
+                ToolPermissionOutcome --> BlockedToolResult : blocked
+                ToolPermissionOutcome --> ExecuteToolBatch : allowed
+                ExecuteToolBatch --> StreamToolUpdates
+                StreamToolUpdates --> AfterToolCallHook
+                AfterToolCallHook --> NormalizeResultImages
+                NormalizeResultImages --> FinalToolResult
+                ErrorToolResult --> PersistToolResult
+                BlockedToolResult --> PersistToolResult
+                FinalToolResult --> PersistToolResult
+                PersistToolResult --> TurnComplete
+                ResponseError --> TurnComplete
+                TurnComplete --> [*]
+            }
+
+            Turn --> NextTurnDecision
+            state NextTurnDecision <<choice>>
+            NextTurnDecision --> StartTurn : tool results or steering
+            NextTurnDecision --> StartTurn : follow-up when otherwise done
+            NextTurnDecision --> AgentEnd : no pending work
+            AgentEnd --> [*]
+        }
+
+        --
+
+        state "Inbound message queues" as QueueInput {
+            [*] --> QueueEmpty
+            QueueEmpty --> SteeringPending : steer
+            QueueEmpty --> FollowUpPending : follow-up
+            SteeringPending --> SteeringPending : additional steering
+            FollowUpPending --> FollowUpPending : additional follow-up
+            SteeringPending --> QueueEmpty : drained after turn
+            FollowUpPending --> QueueEmpty : drained after agent would stop
+            SteeringPending --> RestoreQueuedText : abort
+            FollowUpPending --> RestoreQueuedText : abort
+            RestoreQueuedText --> QueueEmpty : return to editor
+        }
+    }
+
+    Running --> PostRunDecision : agent_end
+    state PostRunDecision <<choice>>
+    PostRunDecision --> RetryDelay : transient provider error
+    PostRunDecision --> Compacting : overflow recovery
+    PostRunDecision --> Compacting : threshold reached
+    PostRunDecision --> Running : extension queued work at agent_end
+    PostRunDecision --> Idle : settled
+
+    RetryDelay --> Running : exponential backoff completed
+    RetryDelay --> Idle : retry cancelled or exhausted
+
+    Idle --> Compacting : manual compact
+
+    state "Compaction pipeline" as Compacting {
+        [*] --> PrepareCompaction
+        PrepareCompaction --> FindCutPoint
+        FindCutPoint --> CollectSummaryMessages
+        CollectSummaryMessages --> DetectSplitTurn
+        DetectSplitTurn --> BeforeCompactHook
+        BeforeCompactHook --> CompactionHookOutcome
+        state CompactionHookOutcome <<choice>>
+        CompactionHookOutcome --> CompactionCancelled : cancel
+        CompactionHookOutcome --> UseExtensionSummary : custom summary
+        CompactionHookOutcome --> ResolveSummaryAuth : default summary
+        ResolveSummaryAuth --> SerializeConversation
+        SerializeConversation --> GenerateCompactionSummary
+        GenerateCompactionSummary --> SummarizationRetry
+        SummarizationRetry --> GenerateCompactionSummary : retry scheduled
+        SummarizationRetry --> AppendCompactionEntry : success
+        UseExtensionSummary --> AppendCompactionEntry
+        AppendCompactionEntry --> RebuildCompactedContext
+        RebuildCompactedContext --> EmitCompactionEvents
+        EmitCompactionEvents --> [*]
+        CompactionCancelled --> [*]
+    }
+
+    Compacting --> CompactionOutcome
+    state CompactionOutcome <<choice>>
+    CompactionOutcome --> Running : compact-and-retry
+    CompactionOutcome --> Running : queued work remains
+    CompactionOutcome --> Idle : manual or threshold complete
+    CompactionOutcome --> Idle : cancelled or failed
+
+    Idle --> TreeNavigation : tree selection
+
+    state "In-place tree navigation" as TreeNavigation {
+        [*] --> ValidateTreeTarget
+        ValidateTreeTarget --> FindCommonAncestor
+        FindCommonAncestor --> CollectAbandonedBranch
+        CollectAbandonedBranch --> BeforeTreeHook
+        BeforeTreeHook --> TreeOutcome
+        state TreeOutcome <<choice>>
+        TreeOutcome --> TreeCancelled : cancelled
+        TreeOutcome --> GenerateBranchSummary : summarize
+        TreeOutcome --> MoveLeaf : no summary
+        GenerateBranchSummary --> AppendBranchSummary
+        AppendBranchSummary --> ApplyOptionalLabel
+        MoveLeaf --> ApplyOptionalLabel
+        ApplyOptionalLabel --> RebuildBranchContext
+        RebuildBranchContext --> EmitSessionTree
+        EmitSessionTree --> [*]
+        TreeCancelled --> [*]
+    }
+
+    TreeNavigation --> Idle
+    Idle --> UserBash : exclamation command
+    state "User bash execution" as UserBash
+    UserBash --> RecordBashMessage : command completed
+    UserBash --> RecordBashMessage : command aborted
+    RecordBashMessage --> Idle
+
+    Idle --> Reloading : reload
+
+    state "Reload resources and extensions" as Reloading {
+        [*] --> ExtensionShutdownForReload
+        ExtensionShutdownForReload --> InvalidateOldContext
+        InvalidateOldContext --> ReloadSettings
+        ReloadSettings --> ReloadResources
+        ReloadResources --> RecreateExtensionRunner
+        RecreateExtensionRunner --> RebuildToolsAndPrompt
+        RebuildToolsAndPrompt --> ExtensionSessionStart
+        ExtensionSessionStart --> DiscoverDynamicResources
+        DiscoverDynamicResources --> [*]
+    }
+
+    Reloading --> Idle
+    Idle --> SessionReplacement : new, resume, fork, clone, or import
+
+    state "Replace active session runtime" as SessionReplacement {
+        [*] --> BeforeSessionSwitchHook
+        BeforeSessionSwitchHook --> SwitchOutcome
+        state SwitchOutcome <<choice>>
+        SwitchOutcome --> ReplacementCancelled : cancelled
+        SwitchOutcome --> AbortCurrentRun : allowed
+        AbortCurrentRun --> PersistOutgoingTurn
+        PersistOutgoingTurn --> SessionShutdown
+        SessionShutdown --> InvalidateOutgoingContext
+        InvalidateOutgoingContext --> DisposeOutgoingSession
+        DisposeOutgoingSession --> ResolveTargetCwd
+        ResolveTargetCwd --> RecreateCwdServices
+        RecreateCwdServices --> CreateReplacementSession
+        CreateReplacementSession --> RebindRunMode
+        RebindRunMode --> ReplacementSessionStart
+        ReplacementSessionStart --> [*]
+        ReplacementCancelled --> [*]
+    }
+
+    SessionReplacement --> Idle
+    Running --> Aborting : escape or abort command
+    Compacting --> Aborting : cancel summary
+    TreeNavigation --> Aborting : cancel branch summary
+    UserBash --> Aborting : cancel process
+    Aborting --> Idle : operations settled
+    Idle --> Shutdown : quit, EOF, or signal
+    Shutdown --> [*]
+
+    classDef active fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef hook fill:#fce7f3,stroke:#db2777,color:#500724
+    classDef recovery fill:#ffedd5,stroke:#ea580c,color:#431407
+    classDef terminal fill:#f3f4f6,stroke:#4b5563,color:#111827
+    class ProviderStreaming,ExecuteToolBatch,GenerateCompactionSummary active
+    class EmitInputHook,BeforeAgentStartHook,TransformContextHook,BeforeToolCallHook,AfterToolCallHook,BeforeCompactHook,BeforeTreeHook hook
+    class RetryDelay,Compacting,Aborting recovery
+    class Idle,Shutdown terminal

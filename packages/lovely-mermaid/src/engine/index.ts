@@ -729,9 +729,15 @@ export function layoutBest(
   const k = best()
   const result = trace === undefined ? results[k] : layout(input, candidates[k].opts, trace)
   if (target !== undefined && sideways) {
+    // the path floor is input-direction and cycle breaking can shorten
+    // it — when the estimate exceeds what was actually achieved it is
+    // invalid, and the achieved width is the honest number
+    const floor = flowFloor(input)
     result.warnings = [
       ...result.warnings,
-      'fit.width not enforced: a sideways flow runs along the width axis, and the engine has no flow-axis capping yet',
+      floor <= result.width
+        ? `fit.width not enforced for sideways flow: the longest dependency path alone needs ≈${floor} columns (page wrap not built yet)`
+        : `fit.width not enforced for sideways flow: narrowest layout found is ${result.width} columns (page wrap not built yet)`,
     ]
   }
   return { result, chosen: candidates[k].opts, candidates }
@@ -785,6 +791,55 @@ function measure(g: LGraph): [number, number] {
  * layering-time estimates cannot see. Returns a full layer assignment
  * for the base (pre-split) graph, or null when nothing moves.
  */
+/**
+ * The structural floor of a sideways layout's width: the heaviest
+ * dependency path, each node contributing its flow-axis size and each
+ * hop a channel row; a compound contributes its own members' floor
+ * plus the border. Cycle edges are skipped (they reverse anyway). An
+ * estimate for the warning, not a bound the search uses.
+ */
+function flowFloor(input: LayoutInput): number {
+  const compounds = input.compounds ?? []
+  const parentOf = new Map<string, string | undefined>()
+  for (const x of [...input.nodes, ...compounds]) parentOf.set(x.id, x.parent)
+  /** the ancestor of `id` (or itself) whose parent is `scope` */
+  const itemIn = (id: string, scope: string | undefined): string | undefined => {
+    let cur: string | undefined = id
+    while (cur !== undefined && parentOf.get(cur) !== scope) cur = parentOf.get(cur)
+    return cur
+  }
+  const scopeFloor = (scope: string | undefined): number => {
+    const size = new Map<string, number>()
+    for (const n of input.nodes) if (n.parent === scope) size.set(n.id, n.w)
+    for (const c of compounds) if (c.parent === scope) size.set(c.id, scopeFloor(c.id) + 2)
+    const outs = new Map<string, string[]>()
+    for (const e of input.edges) {
+      const a = itemIn(e.from, scope)
+      const b = itemIn(e.to, scope)
+      if (a === undefined || b === undefined || a === b) continue
+      outs.set(a, [...(outs.get(a) ?? []), b])
+    }
+    const memo = new Map<string, number>()
+    const onPath = new Set<string>()
+    const depth = (id: string): number => {
+      const m = memo.get(id)
+      if (m !== undefined) return m
+      if (onPath.has(id)) return 0
+      onPath.add(id)
+      let best = 0
+      for (const nx of outs.get(id) ?? []) best = Math.max(best, 1 + depth(nx))
+      onPath.delete(id)
+      const d = (size.get(id) ?? 0) + best
+      memo.set(id, d)
+      return d
+    }
+    let best = 0
+    for (const id of size.keys()) best = Math.max(best, depth(id))
+    return best
+  }
+  return scopeFloor(undefined)
+}
+
 function squeezeMoves(
   base: LGraph,
   routed: LGraph,

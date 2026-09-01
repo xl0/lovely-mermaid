@@ -1,0 +1,26 @@
+stateDiagram-v2
+  direction LR
+  [*] --> Boot
+  Boot --> Auth: config loaded
+  Auth --> Session: token ok
+  Auth --> Locked: 3 failures
+  Locked --> Auth: timeout
+  state Session {
+    direction LR
+    [*] --> Idle
+    Idle --> Streaming: request
+    Streaming --> Idle: complete
+    Streaming --> Aborted: cancel
+    Aborted --> Idle
+    --
+    [*] --> Cold
+    Cold --> Warm: cache fill
+    Warm --> Cold: evict
+  }
+  Session --> Draining: shutdown
+  state fork <<choice>>
+  Draining --> fork
+  fork --> Flushed: buffers empty
+  fork --> Killed: timeout
+  Flushed --> [*]
+  Killed --> [*]

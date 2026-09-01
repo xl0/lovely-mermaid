@@ -1,0 +1,177 @@
+flowchart LR
+    User([User or host application])
+
+    subgraph Entry["1. Entry points and run modes"]
+        direction LR
+        CLI["CLI<br/><code>main.ts</code><br/>arguments, files, stdin"]
+        SDK["Node.js SDK<br/><code>createAgentSession()</code><br/><code>createAgentSessionRuntime()</code>"]
+        TUI["Interactive mode<br/><code>InteractiveMode</code><br/>pi-tui editor and chat"]
+        Print["Print / JSON mode<br/><code>runPrintMode()</code><br/>text or JSONL events"]
+        RPC["RPC mode<br/><code>runRpcMode()</code><br/>JSONL commands, responses, events"]
+        RPCClient["External RPC client<br/>any language or process"]
+    end
+
+    User --> CLI
+    User --> SDK
+    CLI --> TUI
+    CLI --> Print
+    CLI --> RPC
+    RPCClient <-->|"LF-delimited JSON"| RPC
+
+    subgraph Bootstrap["2. CLI bootstrap and cwd-bound service composition"]
+        direction TB
+        Parse["Parse CLI options<br/>resolve mode, files, model, tools"]
+        Trust["Resolve project trust<br/>saved decision, override, extension hook, or prompt"]
+        ServiceFactory["<code>createAgentSessionServices()</code><br/>recreated when session cwd changes"]
+        Settings["<code>SettingsManager</code><br/>merge global and trusted project settings"]
+        Resources["<code>DefaultResourceLoader</code><br/>discover and load resources"]
+        Models["<code>ModelRuntime</code><br/>providers, catalogs, auth, availability"]
+        Sessions["<code>SessionManager</code><br/>new, continue, resume, fork, or memory"]
+        SessionFactory["<code>createAgentSessionFromServices()</code><br/>resolve model, thinking level, and tools"]
+    end
+
+    CLI --> Parse --> Trust --> ServiceFactory
+    ServiceFactory --> Settings
+    ServiceFactory --> Resources
+    ServiceFactory --> Models
+    Parse --> Sessions
+    Settings --> SessionFactory
+    Resources --> SessionFactory
+    Models --> SessionFactory
+    Sessions --> SessionFactory
+    SDK -->|"may construct the same services directly"| SessionFactory
+
+    subgraph Runtime["3. Replaceable session runtime"]
+        direction TB
+        RuntimeHost["<code>AgentSessionRuntime</code><br/>owns current session and cwd-bound services"]
+        Replace["Session replacement<br/>new, resume, fork, clone, import"]
+        Session["<code>AgentSession</code><br/>shared orchestration for every mode"]
+        ExtRunner["<code>ExtensionRunner</code><br/>hooks, commands, tools, providers, UI"]
+        ToolRegistry["Tool registry<br/>active allowlist and prompt guidance"]
+        SystemPrompt["System prompt builder<br/>base prompt + tools + skills + context"]
+    end
+
+    SessionFactory --> RuntimeHost
+    RuntimeHost --> Session
+    Replace -->|"shutdown old runtime"| RuntimeHost
+    RuntimeHost -->|"recreate for target cwd"| Replace
+    TUI <-->|"commands and session events"| RuntimeHost
+    Print <-->|"prompts and session events"| RuntimeHost
+    RPC <-->|"commands and session events"| RuntimeHost
+    SDK <-->|"direct typed API and events"| Session
+    Resources --> ExtRunner
+    Session <--> ExtRunner
+    Session --> ToolRegistry
+    Session --> SystemPrompt
+    Resources --> SystemPrompt
+    ToolRegistry --> SystemPrompt
+
+    subgraph AgentCore["4. Provider-agnostic agent core"]
+        direction TB
+        Agent["<code>Agent</code><br/>state, lifecycle, abort, steering and follow-up queues"]
+        Loop["<code>runAgentLoop()</code><br/>assistant turn and tool loop"]
+        Context["Context boundary<br/>extension transform, image filtering,<br/>convert AgentMessage to LLM Message"]
+        Stream["Streaming model call<br/>text, thinking, tool-call, usage deltas"]
+        Validate["Resolve tool and validate arguments"]
+        Execute["Execute tool calls<br/>parallel by default, sequential when required"]
+        Continue{"More tool calls,<br/>steering, or follow-up?"}
+    end
+
+    Session -->|"prompt or continue"| Agent
+    Agent --> Loop
+    Loop --> Context
+    Context --> Models
+    Models --> Stream
+    Stream -->|"assistant tool calls"| Validate
+    Validate --> Execute
+    Execute -->|"tool-result messages"| Continue
+    Continue -->|"yes: next turn"| Context
+    Continue -->|"no: agent_end"| Agent
+    Stream -->|"final response or error"| Agent
+
+    subgraph Providers["5. Model and provider layer"]
+        direction LR
+        PiAI["pi-ai<br/>provider adapters and normalized streams"]
+        BuiltinProviders["Built-in providers<br/>Anthropic, OpenAI, Google,<br/>Bedrock, OpenRouter, and others"]
+        CustomProviders["Custom providers<br/><code>models.json</code> or extensions"]
+        APIs[(Remote model APIs<br/>or local llama.cpp router)]
+    end
+
+    Models --> PiAI
+    ExtRunner -->|"register or unregister"| Models
+    PiAI --> BuiltinProviders
+    PiAI --> CustomProviders
+    BuiltinProviders <--> APIs
+    CustomProviders <--> APIs
+    APIs -->|"normalized event stream"| Stream
+
+    subgraph Tools["6. Tool execution boundary"]
+        direction LR
+        BuiltinTools["Built-in tools<br/>read, bash, edit, write,<br/>grep, find, ls"]
+        ExtensionTools["Extension and SDK tools<br/>custom schemas and renderers"]
+        Files[(Project files)]
+        Shell[(Shell and child processes)]
+    end
+
+    BuiltinTools --> ToolRegistry
+    ExtensionTools --> ToolRegistry
+    ExtRunner --> ExtensionTools
+    ToolRegistry --> Validate
+    Execute --> BuiltinTools
+    Execute --> ExtensionTools
+    BuiltinTools --> Files
+    BuiltinTools --> Shell
+
+    subgraph Persistence["7. State, configuration, and discovered resources"]
+        direction LR
+        SessionFiles[("Session JSONL<br/>tree entries with id and parentId")]
+        SettingsFiles[("settings.json<br/>global plus trusted project")]
+        AuthFiles[("auth.json and model catalogs")]
+        ResourceFiles[("AGENTS.md / CLAUDE.md<br/>SYSTEM.md<br/>extensions, skills, prompts, themes<br/>pi packages")]
+    end
+
+    Sessions <--> SessionFiles
+    Session -->|"persist message, model, thinking,<br/>compaction, branch, labels, custom state"| Sessions
+    Settings <--> SettingsFiles
+    Models <--> AuthFiles
+    Resources <--> ResourceFiles
+
+    subgraph Reliability["8. Session-level reliability and context control"]
+        direction LR
+        Retry["Automatic retry<br/>transient provider failures<br/>with exponential backoff"]
+        Compact["Compaction<br/>threshold, overflow recovery, or manual"]
+        Branch["Tree navigation<br/>optional abandoned-branch summary"]
+        SummaryCall["One-off summarization call"]
+    end
+
+    Session --> Retry
+    Retry -->|"continue without persisted error in active context"| Agent
+    Session --> Compact
+    Session --> Branch
+    Compact --> SummaryCall
+    Branch --> SummaryCall
+    SummaryCall --> Models
+    Compact -->|"append summary checkpoint and rebuild context"| Sessions
+    Branch -->|"move leaf; optionally append summary"| Sessions
+
+    ExtRunner -.->|"input, before_agent_start,<br/>context and provider hooks"| Context
+    ExtRunner -.->|"tool_call may block"| Validate
+    ExtRunner -.->|"tool_result may transform"| Execute
+    Agent -.->|"ordered lifecycle events"| Session
+    Session -.->|"events for rendering or transport"| TUI
+    Session -.->|"events"| Print
+    Session -.->|"events"| RPC
+
+    classDef interface fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef core fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef service fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef external fill:#ffedd5,stroke:#ea580c,color:#431407
+    classDef data fill:#f3f4f6,stroke:#4b5563,color:#111827
+    classDef hook fill:#fce7f3,stroke:#db2777,color:#500724
+
+    class CLI,SDK,TUI,Print,RPC,RPCClient interface
+    class RuntimeHost,Session,Agent,Loop,Context,Stream,Validate,Execute,Continue core
+    class Parse,Trust,ServiceFactory,SessionFactory,Settings,Resources,Models,Sessions,SystemPrompt,ToolRegistry service
+    class PiAI,BuiltinProviders,CustomProviders,APIs,Files,Shell external
+    class SessionFiles,SettingsFiles,AuthFiles,ResourceFiles data
+    class ExtRunner,Retry,Compact,Branch,SummaryCall hook

@@ -115,3 +115,16 @@ describe('fast mode', () => {
     }
   })
 })
+
+describe('sideways fit honesty', () => {
+  test('a sideways target warns with the structural floor', () => {
+    const input = { ...inputOf(['A>B', 'B>C', 'C>D']), dir: 'right' as const }
+    const { result } = layoutBest(input, {}, { width: 10 })
+    const warn = result.warnings.find((w) => w.includes('sideways'))
+    expect(warn).toBeDefined()
+    expect(warn).toMatch(/\d+ columns/)
+    // the quoted number never exceeds what the layout actually achieved
+    const n = Number((warn as string).match(/(\d+) columns/)?.[1])
+    expect(n).toBeLessThanOrEqual(result.width)
+  })
+})

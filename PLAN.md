@@ -258,6 +258,43 @@ visualization comes first and every phase must be viewable.
       121→119, rest held; never-worse by construction. Step 2 if
       wanted: same idea within dummy bundles (longest span outermost)
       to stabilize the routing windows behind the dither.
+## LR width fitting (planned 2026-09-01)
+
+For sideways flow the terminal width caps the FLOW axis; every existing
+mechanism works the cross axis. Facts: caller width ≈ Σ (widest node
+per band) + channels; the longest dependency path is a hard floor
+(arch-classes: path 8 × ~33w → floor ≈ 300 — no packing fits 160).
+Caller height is unconstrained (terminals scroll), which makes LR
+easier than TB once the right lever exists.
+
+- [x] LR-1 Corpus + honesty (2026-09-01): rotated variants
+      arch-state-lr (1074×79!), arch-system-lr (749×66),
+      state-regions-lr (118×21) in examples/; ER learned `direction`
+      (mermaid 10.5+) — arch-session-er-lr renders 197×70, narrower
+      AND shorter than its TB twin. `flowFloor`: recursive per-scope longest
+      path (node flow sizes + hops, compounds contribute their own
+      floor + border); the sideways warning quotes it — arch-classes
+      "needs ≈282 columns". The input-direction estimate can exceed
+      the achieved width when cycle breaking shortens paths
+      (arch-state-lr: est 1663 vs achieved 1074) — the warning then
+      falls back to "narrowest found". Wrap targets for LR-3:
+      1074→~250 (4-5 strips), 749→~200, 317→~170 (2 strips).
+- [ ] LR-2 Flow packing: dispersal with a flow-extent objective
+      (Σ band heights) — pack underfilled bands down to the path
+      floor. Reuses packLayers/squeeze machinery with the transposed
+      estimator. No-op for depth-dominated diagrams; wins on slack.
+- [ ] LR-3 Page wrap — the centerpiece. Post-transform compositor on
+      LayoutResult: cut the laid-out strip at band boundaries (never
+      through a frame), stack strips vertically, reroute cut-crossing
+      edges as reading-order connectors through the inter-strip gutter
+      (margin lanes reserved like loop wraps; their columns count
+      against the fit). Cut selection = small DP over band boundaries
+      minimizing crossing edges subject to strip width ≤ target. Loop:
+      wrap-into-2/3/… candidates ranked by the existing fits→height→
+      width metric; fast mode gets a single estimated wrap. Risks:
+      connector spaghetti when a cut severs many edges (the DP
+      objective), frames pinning cut points, labels (still deferred).
+
 - [x] Stranded nodes + channel overlap (2026-09-01). (a) A node whose
       ports are all south now sinks to its band's floor (CompactionOutcome
       hung 93 rows above Idle at the top of a tall frame's band; now 11).
