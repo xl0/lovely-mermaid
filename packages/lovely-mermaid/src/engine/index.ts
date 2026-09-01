@@ -636,7 +636,9 @@ export function layoutBest(
         ...opts.layering,
         ...(cap === undefined ? {} : { maxWidth: cap }),
       },
-      ...(stack ? { stackChains: true } : {}),
+      // a pinned `stackChains: true` widens the probes, it never
+      // forces: each candidate is stacked or not on its own
+      stackChains: stack ? true : undefined,
       ...(target === undefined || opts.squeeze !== undefined
         ? {}
         : { squeeze: target, squeezeBudget: 2 }),
@@ -687,7 +689,7 @@ export function layoutBest(
   // hybrid flow probes: a width-capped sideways layout can trade its
   // unconstrained cross extent for flow width by stacking chains — run
   // the same cells folded and let the metric arbitrate
-  if (sideways && target !== undefined && opts.stackChains === undefined) {
+  if (sideways && target !== undefined && opts.stackChains !== false) {
     for (const [cy, pl] of cells) run(cy, pl, opts.layering?.maxWidth, true)
   }
   if (
@@ -760,7 +762,7 @@ export function layoutBest(
   // grows the capped axis for down flow, so it cannot help there.
   if (
     !(sideways && target !== undefined) &&
-    opts.stackChains === undefined &&
+    opts.stackChains !== false &&
     (target === undefined || candidates.some((c) => c.fits === true))
   ) {
     const ranked = [...candidates].sort((a, b) => (better(a, b) ? -1 : 1))

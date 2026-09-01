@@ -326,7 +326,13 @@ easier than TB once the right lever exists.
       rejects width growth on its own, a target's fits gate budgets
       it, and sideways-without-target gets an explicit guard (a
       stacked candidate may not exceed the best whole layout's
-      height; a pinned `stackChains` bypasses it). Segmentation keeps
+      height; a pinned `stackChains` bypasses that one guard). Fixed
+      2026-09-01: a pinned `true` used to FORCE stacking into every
+      loop candidate — in TB the folded chains are wide indivisible
+      super-nodes and arch-state@100 collapsed to a 182 floor. The pin
+      now only widens the probes; stacked candidates must win the
+      metric, so stacking can never cost the constrained axis (raw
+      `layout()` still stacks unconditionally for the phase view). Segmentation keeps
       all-small runs unlimited but charges every extension once a
       bulky member is aboard (a tall head no longer drags the smalls
       into one over-tall stack). TB free lunches are real:

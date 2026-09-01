@@ -153,8 +153,10 @@ export interface LayoutOptions {
   squeezeLoose?: boolean
   /** hybrid flow: fold chains of single-in/single-out nodes into one
    * band, the members stacked along the cross axis — trades cross
-   * extent for flow extent (the fit lever for a width-capped sideways
-   * layout; elsewhere the loop probes it and keeps only free lunches) */
+   * extent for flow extent. In `layout` a `true` stacks unconditionally;
+   * in the candidate loop it only widens the stacked probes — a stacked
+   * candidate still has to win the metric, so stacking can never cost
+   * the constrained axis. `false` disables the probes. */
   stackChains?: boolean
   cycles?: CyclesOptions
   layering?: LayeringOptions
