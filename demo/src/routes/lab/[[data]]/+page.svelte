@@ -174,12 +174,12 @@
 	// A clicked candidate renders as a preview without touching the
 	// settings; [use] adopts it. Editing anything (options, source, fit)
 	// makes the stored fingerprints stale and the preview falls away.
-	let preview = $state<{ c: Candidate; o: string; inp: unknown } | null>(null);
+	let preview = $state<{ c: Candidate; o: string; inp: unknown; w: number | null } | null>(null);
 	function togglePreview(c: Candidate) {
 		preview =
 			preview !== null && preview.c === c
 				? null
-				: { c, o: JSON.stringify($state.snapshot(opts)), inp: input };
+				: { c, o: JSON.stringify($state.snapshot(opts)), inp: input, w: fitW };
 	}
 	// The engine runs whenever the input, any option, or the preview
 	// selection changes.
@@ -189,7 +189,7 @@
 		const target = fitW;
 		const fast = streaming;
 		let pv = preview;
-		if (pv !== null && (pv.o !== JSON.stringify(o) || pv.inp !== input)) {
+		if (pv !== null && (pv.o !== JSON.stringify(o) || pv.inp !== input || pv.w !== target)) {
 			pv = null;
 			untrack(() => (preview = null));
 		}
