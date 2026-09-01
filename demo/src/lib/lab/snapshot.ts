@@ -70,6 +70,18 @@ export function parseSnapshot(text: string): Snapshot {
 				throw new Error(`${where}.label must be { text, x?, y?, w?, h? }`);
 			for (const k of ['x', 'y', 'w', 'h']) num(`${where}.label`, l, k);
 		}
+		if (o.labels !== undefined) {
+			if (!Array.isArray(o.labels)) throw new Error(`${where}.labels must be an array`);
+			o.labels.forEach((l: unknown, j: number) => {
+				const q = l as Record<string, unknown>;
+				const bad =
+					typeof q !== 'object' ||
+					q === null ||
+					typeof q.text !== 'string' ||
+					['x', 'y', 'w', 'h'].some((k) => typeof q[k] !== 'number');
+				if (bad) throw new Error(`${where}.labels[${j}] must be { text, x, y, w, h }`);
+			});
+		}
 	});
 	return raw as Snapshot;
 }

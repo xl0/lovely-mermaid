@@ -20,7 +20,7 @@ export interface View {
 	gapY: number;
 	/** faint cell lines behind the picture */
 	grid: boolean;
-	/** edge label chips (they are unplaced until the labels phase lands) */
+	/** edge labels: placed rects in the flat picture, midpoint chips elsewhere */
 	labels?: boolean;
 }
 export const DEFAULT_VIEW: View = { sx: 10, sy: 20, gapX: 4, gapY: 2, grid: true, labels: true };
@@ -454,8 +454,34 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 		);
 	}
 	snap.edges.forEach((e, i) => {
-		if (e.label === undefined || view.labels === false) return;
+		if (view.labels === false) return;
+		// placed labels (the flat result picture): exact grid-cell rects,
+		// the text split into the block's rows and spread to the cell
+		// pitch, so it sits on the grid the way terminal output will
+		for (const l of e.labels ?? []) {
+			// a float body hangs its lines off the `[n] ` prefix:
+			// [1] line one
+			//     line two
+			// — indented by POSITION, not by leading spaces (SVG collapses
+			// whitespace, which also made textLength stretch the remnant)
+			const pre = /^\[\d+\] /.exec(l.text);
+			const rows: { t: string; off: number }[] = pre
+				? wrapCells(l.text.slice(pre[0].length), l.w - pre[0].length, l.h).map((ln, k) =>
+						k === 0 ? { t: pre[0] + ln, off: 0 } : { t: ln, off: pre[0].length }
+					)
+				: wrapCells(l.text, l.w, l.h).map((t) => ({ t, off: 0 }));
+			const text = rows
+				.map(
+					(r, k) =>
+						`<text x="${X(l.x + r.off)}" y="${Y(l.y + k) + sy / 2 + fs * 0.35}" textLength="${r.t.length * sx}" lengthAdjust="spacing" fill="${C.label}">${esc(r.t)}</text>`
+				)
+				.join('');
+			push(
+				`<g data-edge="${i}"><rect x="${X(l.x)}" y="${Y(l.y)}" width="${l.w * sx}" height="${l.h * sy}" fill="${C.labelBg}"/>${text}</g>`
+			);
+		}
 		const l = e.label;
+		if (l === undefined) return;
 		const tw = l.text.length * fs * 0.62 + 8;
 		let x: number;
 		let y: number;
@@ -476,12 +502,44 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 			y = m[1] - h / 2;
 		}
 		push(
-			`<g data-edge="${i}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${C.labelBg}" stroke="${C.label}" stroke-width="0.5"/>` +
+			`<g data-edge="${i}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${C.labelBg}"/>` +
 				`<text x="${x + w / 2}" y="${y + h / 2 + fs * 0.35}" text-anchor="middle" fill="${C.label}">${esc(l.text)}</text></g>`
 		);
 	});
 	push('</g></svg>');
 	return { svg: out.join('\n'), w: W, h: H, stats, warnings };
+}
+
+/** Greedy word wrap by character count (label cells ≈ characters for
+ * the terminal consumer); an overlong word hard-splits, overflow rows
+ * truncate into an ellipsis on the last one. */
+function wrapCells(text: string, w: number, h: number): string[] {
+	const rows: string[] = [];
+	let cur = '';
+	for (const word of text.split(/\s+/).filter((s) => s !== '')) {
+		let t = word;
+		while (t.length > 0) {
+			const add = cur === '' ? t : `${cur} ${t}`;
+			if (add.length <= w) {
+				cur = add;
+				t = '';
+			} else if (cur === '') {
+				rows.push(t.slice(0, w));
+				t = t.slice(w);
+			} else {
+				rows.push(cur);
+				cur = '';
+			}
+		}
+	}
+	if (cur !== '') rows.push(cur);
+	if (rows.length === 0) rows.push('');
+	if (rows.length > h) {
+		rows.length = h;
+		const last = rows[h - 1];
+		rows[h - 1] = last.length >= w ? `${last.slice(0, Math.max(0, w - 1))}…` : `${last}…`;
+	}
+	return rows;
 }
 
 /** The point halfway along a polyline's length. */

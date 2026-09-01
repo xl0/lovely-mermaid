@@ -7,6 +7,14 @@ export const MAX_LINES = 4
 /** Edge labels are truncated to this many columns. */
 export const MAX_LABEL = 28
 
+/** A centre edge label longer than this offers a balanced block shape
+ * for its floating body (engine path only). */
+export const EDGE_WRAP = 18
+
+/** …and longer than this, a hard-wrapped narrow shape for hanging
+ * beside a vertical run (`│this label` / `│wraps like` …). */
+export const EDGE_WRAP_NARROW = 12
+
 /**
  * Identifier-boundary characters preferred as break points when a single word
  * is too wide to fit, so it is not sliced mid-segment.

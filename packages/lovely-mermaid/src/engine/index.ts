@@ -21,7 +21,8 @@
  */
 import { breakCycles, reverse } from './cycles.ts'
 import type { LGraph, LNode, LPort } from './graph.ts'
-import { buildGraph, toSnapshot } from './graph.ts'
+import { buildGraph, portCard, sideWidth, toSnapshot } from './graph.ts'
+import { placeEdgeLabels } from './labels.ts'
 import { applyLayers, assignLayers, splitLongEdges } from './layering.ts'
 import { orderNodes } from './ordering.ts'
 import { placeNodes } from './placement.ts'
@@ -256,14 +257,16 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
         // (a port with an out edge goes south, everything else north) —
         // counting edges undercounted hubs whose reversed edges flipped
         // their ports' sides, and the crowded side lost its | | pitch
-        let south = 0
-        let north = 0
+        const south: LPort[] = []
+        const north: LPort[] = []
         for (const q of n.ports) {
-          if (q.out.length > 0) south++
-          else north++
+          // record the card before splitting moves labels off the far
+          // segments; tunePorts keeps each port's reserved pitch
+          q.card = portCard(q)
+          if (q.out.length > 0) south.push(q)
+          else north.push(q)
         }
-        const k = Math.max(south, north)
-        if (k > 0) n.w = Math.max(n.w, (k - 1) * (1 + sp.edgeEdge) + 3)
+        n.w = Math.max(n.w, sideWidth(south, sp.edgeEdge), sideWidth(north, sp.edgeEdge))
       }
       // children: their ports follow from this level's edge directions
       const childSpecs = new Map<string, PortSpec[]>()
@@ -516,6 +519,9 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
     result.edges[id] = { route, labels: root.labels.get(id) ?? [] }
   }
   const final = input.dir === 'down' ? result : transform(result, input.dir)
+  // labels go on last, in the final orientation — text is horizontal in
+  // the caller's frame, so "a horizontal run" only exists here
+  if (opts.until === undefined) placeEdgeLabels(final, input.edges)
   if (trace !== undefined && opts.until === undefined) {
     trace(flatSnapshot(final, input))
   }
@@ -1074,8 +1080,12 @@ function flatSnapshot(res: LayoutResult, input: LayoutInput): Snapshot {
     const r = res.edges[e.id]
     if (r === undefined) continue
     const s: SEdge = { from: e.from, to: e.to, route: r.route }
-    const label = e.labels?.find((l) => l.at === 'center')
-    if (label !== undefined) s.label = { text: label.text }
+    const floats = (res.floats ?? []).filter((f) => f.edge === e.id)
+    const shown = [
+      ...r.labels,
+      ...floats.map((f) => ({ text: `[${f.n}] ${f.text}`, x: f.x, y: f.y, w: f.w, h: f.h })),
+    ]
+    if (shown.length > 0) s.labels = shown
     edges.push(s)
   }
   return { title: 'labels · flat', dir: input.dir, nodes: out, edges }

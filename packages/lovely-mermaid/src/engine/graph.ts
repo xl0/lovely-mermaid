@@ -23,6 +23,9 @@ export interface LPort {
   pos: number
   /** `pos` was set by the compound's own layout; ordering keeps it */
   fixed?: boolean
+  /** widest end label that will sit beside this port's line (`│1..*`),
+   * recorded before long edges split their labels away; `portCard` */
+  card?: number
   in: LEdge[]
   out: LEdge[]
 }
@@ -167,6 +170,48 @@ export function buildGraph(input: LayoutInput): LGraph {
  * cost; the maps keep the internal references (ports ↔ nodes ↔ edges)
  * intact, including their array orders.
  */
+/**
+ * The widest end label landing at this port: the room its line needs
+ * beside it (`│1..*`). The label at "this" end follows the stored
+ * orientation — a reversed edge swaps which of tail/head lands here.
+ */
+export function portCard(p: LPort): number {
+  let card = 0
+  for (const [e, atSrc] of [
+    ...p.out.map((e): [LEdge, boolean] => [e, true]),
+    ...p.in.map((e): [LEdge, boolean] => [e, false]),
+  ]) {
+    const at = atSrc !== (e.reversed === true) ? 'tail' : 'head'
+    for (const l of e.labels) if (l.at === at) card = Math.max(card, l.w)
+  }
+  return card
+}
+
+/** A port's cross-axis pitch to its successor: the channel pitch, or
+ * its card plus a separating cell (`│1..* │`). */
+export const portPitch = (p: LPort, edgeEdge: number): number => {
+  const card = p.card ?? portCard(p)
+  return Math.max(1 + edgeEdge, card > 0 ? card + 2 : 0)
+}
+
+/**
+ * The width one side's ports need at their per-port pitches: the sum,
+ * less the smallest (no pitch is spent after the last port, and the
+ * order is not yet known), plus the corners. Uniform pitches reduce to
+ * the old `(k-1)·pitch + 3`.
+ */
+export function sideWidth(ports: LPort[], edgeEdge: number): number {
+  if (ports.length === 0) return 0
+  let sum = 0
+  let min = Number.POSITIVE_INFINITY
+  for (const p of ports) {
+    const per = portPitch(p, edgeEdge)
+    sum += per
+    min = Math.min(min, per)
+  }
+  return sum - min + 3
+}
+
 export function cloneGraph(g: LGraph): LGraph {
   const nm = new Map<LNode, LNode>()
   const pm = new Map<LPort, LPort>()

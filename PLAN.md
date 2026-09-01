@@ -209,8 +209,9 @@ visualization comes first and every phase must be viewable.
       parked: cap refinement is one step (results non-monotonic in the
       target — fit 120 found cap26 → 156 wide, fit 80 stopped at 191);
       a cap ladder / binary search within budget when we return to it.
-- [ ] Next: labels (decisions pending). Then the width-aware ordering
-      case (the 85-column e64/e75 hole) as a loop dimension.
+- [x] Labels landed (all milestones, 2026-09-01 — see "Labels" below).
+- [ ] Next: the width-aware ordering case (the 85-column e64/e75 hole)
+      as a loop dimension.
 - [x] Geometry feedback (2026-08-31): `squeeze` — measure band
       occupancy from the routed picture as merged x-intervals, move one
       row per iteration into gaps that fit it, force layers back
@@ -345,6 +346,133 @@ easier than TB once the right lever exists.
       (Σ band heights) — pack underfilled bands down to the path
       floor. Reuses packLayers/squeeze machinery with the transposed
       estimator. No-op for depth-dominated diagrams; wins on slack.
+
+## Labels (planned 2026-09-01)
+
+Opportunistic placement into existing whitespace — labels never change
+the layout (no gap inflation; that's mermaid's way, ours is compactness
+first with a legend as the pressure valve). Runs ONCE on the winner, on
+final-orientation geometry (text is horizontal, so "horizontal run" is a
+property of the rendered frame — LR flows get tier 1 almost for free,
+TB leans on tiers 3-5), after transpose and expandStacks — which brings
+back the stacked chain-edge labels and ER cardinalities for free.
+
+CURRENT RULES (settled with the user over 2026-09-01; supersede the
+earlier drafts). A centre label is BARE text, flat by default; it may
+sit tight against its own line, nodes, kinks and arrowheads. Soft
+nudges (HUG 2, CROSS 4) keep a cell of line before mid-route kinks
+(route ends exempt) and crossings, when spacing allows. Touching a
+FOREIGN edge: fatal for off-line text at its ends (would read as one
+word); a line above/below off-line text costs TOUCH 200 ('band'); on
+own-line interrupts of horizontal runs anything costs 200 ('all').
+TOUCH only competes within a tier (gaps are 10000).
+
+The ladder — score = tier + route distance from source, sliding each
+run from its source end:
+1. Flat text inside a horizontal run (interrupts its own line).
+2. Flat text interrupting a vertical run — ON the line beats every
+   beside placement (the user's screenshots). The text GRAVITATES to
+   centre over the column but may slide anywhere that keeps a
+   character on the line (one cost per cell off-centre) — nearby
+   obstacles act as repulsors; this subsumes the old flush and
+   first/last-letter-over anchors.
+3. Beside a horizontal run — above, below at a whisker more; needs
+   only a little overlap (≥2 cells, relaxed from "half"); STRICT
+   about foreign edges — text over/under ANOTHER horizontal run reads
+   as belonging to it (user's screenshot).
+4. Beside a vertical run — the hard-wrapped `tall` shape when the
+   label has one (`│this label / │wraps like`, left-aligned rows),
+   else flat.
+Then: `[n]` marker through the same ladder + body `[n] text` (the
+`block` shape) in dead space within FLOAT_R 12 (per-axis gap sum for
+ranking, Chebyshev for eligibility; strict no-touch to EDGES, but
+floats may stack vertically against each other — horizontal-only
+moat; a body stays in its marker's REGION — same innermost frame or
+top level — LEXICOGRAPHICALLY: any own-region spot beats any parent
+spot beats any escape to the top, framed spots get twice the leash
+(2·FLOAT_R — staying inside is worth a walk), a foreign frame or one
+nested deeper never takes a body, and reaching left of the marker
+pays a nudge (right+down is the reading order — 16 once, a corner no worse than a side); a body
+stacking on another float snaps to its left edge (misalignment 6)); else legend, `[n]`-keyed
+or endpoint-keyed without a marker. Marker numbers RESTART per
+self-contained frame (all pairs inside, no inbound bodies, no
+legend-keyed markers) — everything else shares one global sequence
+that never enters such frames; renumbering runs last and only ever
+shrinks tags, so placed rects stay valid. The right+down float nudge
+is 16 per axis (reading order).
+Centre labels never warn.
+
+Shapes come from the consumer (`InputLabel`): flat `w×1` always; a
+`tall` block (hard wrap at 12) offered only to tier 4; a `block`
+(balanced wrap at 18) only to floats. Nothing else wraps — an
+interrupt must stay one line or the line disappears. Balanced wrap
+never splits below the longest word.
+
+Rail annotations (ER/class cardinality diagrams) get dedicated
+treatment, not this ladder. End labels sit BESIDE the line right at
+their port; port proximity dominates their cost — a hub fan reads as
+one row of cards, each right of its line, touching the neighbouring
+line at a penalty (uniformity disambiguates). One edge's labels form
+a rail that stacks touching VERTICALLY only (horizontal moat guards
+against "1variant"). Their room is RESERVED, both axes, per port:
+each port records its widest end label (`LPort.card`, taken before
+splitting moves labels off far segments) and owes `cardW + 2` pitch
+to its successor; a side's width is the SUM of per-port pitches (less
+the smallest; uniform reduces to the old formula); tunePorts enforces
+the chain with suffix-sum caps, and stacks chain the same pitches in
+their pinned spread. `Spacing.channelMin` floors every channel (even
+all-straight ones) — set by the bridge for cardinality diagrams
+(down: cards + verb rows; sideways: half the verb width + 2). Cost:
+er-lr +32 columns +8 rows; er corpus places everything but 1-2
+fan-interior cards. Parked: E/W side ports for end labels.
+
+Wide text bodies (centre labels, markers, floats) keep horizontal
+distance from each other: 2 cells hard (2-cell side moat), 4
+preferred (NEAR 8 on a row-zone grid) — two texts on one row with
+less between them read as one. Cards are exempt (the fan row lives
+at pitch 2).
+
+Bookkeeping: frame borders + title cells are obstacles; greedy in
+edge declaration order; one `[n]` counter shared by floats and
+legend; occupancy grid over the canvas. The full adaptive multi-shape
+(`InputLabel.shapes`) stays DEFERRED.
+
+Milestones: [x] (1) placement core (2026-09-01): `engine/labels.ts`,
+tiers 1-3 + end-label rule, run at the end of `layout()` on the final
+result (probes pay it too — a few ms, revisit only if timings
+complain); bridge pre-wraps centre labels > 18 into a balanced block
+(floor: the longest word — the balance loop once sliced
+"exclamation" mid-word) and draws multi-row blocks centre-aligned;
+label lint joined the seeded sweep (in-bounds, off boxes / borders /
+labels, covers only own-edge cells), 8 placement unit tests pin the
+tier and spacing rules. Corpus: TB ER reads like the hand-drawn
+ideal (verbs embedded in horizontal runs, cards on the drops);
+arch-state places ~60%, misses are short channel hops. LR packs
+boxes adjacent (runs have no interior), so LR ER starves: 66/90
+missed — milestone 2's floats/legend carry those, and the
+labels→layout feedback (below) is the real fix if that disappoints.
+[x] (2) markers + floats + legend (2026-09-01): a centre label the
+ladder cannot seat never warns now — a `[n]` marker embeds through
+the same ladder (the small shape fits where the label did not), the
+body `[n] text` spiral-searches dead space within FLOAT_R 12 of the
+marker, distance = the per-axis gap SUM (Chebyshev let a body sit
+across a whole box diagonally — reads far) (`LayoutResult.floats`),
+and with no room even for that the
+label joins `LayoutResult.legend` — `[n]`-keyed while a marker
+stands, endpoint-keyed when none fits (the tight-LR case). The
+bridge draws markers unpadded (rect as wide as the bare text),
+floats as prefix + hanging wrapped lines, and renders the legend as
+a box prepended above the canvas lines (`finishArt`, no geometry
+offset); the flat lab picture shows floats on their edges. Corpus:
+every centre label accounted for — arch-state 19 floats + 10 legend
++ 0 warnings, er-lr 11 floats + 12 legend (was 22 dropped verbs).
+Cards keep drop+warn (er-lr: 45 — the gap-growth feedback is their
+only real fix). (3) consumers were already wired (importGraph
+measures flowchart/state/class/ER labels uniformly) — verified on
+the corpus; engine goldens belong to the switch-over task. Future
+lever if the corpus turns legend-heavy: labels→layout feedback
+(grow channelGap / nodeNode where labels starve), same shape as
+squeeze. Not now.
 
 - [x] Stranded nodes + channel overlap (2026-09-01). (a) A node whose
       ports are all south now sinks to its band's floor (CompactionOutcome

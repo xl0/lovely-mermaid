@@ -8,8 +8,7 @@
  * a subgraph (same id) is dropped and its edges attach to the compound.
  * The engine hands back each frame; the title goes on its top row.
  *
- * Status: head and tail labels (cardinalities) are measured but not placed
- * yet, and styles are not applied. Not exported from the package index.
+ * Status: styles are not applied. Not exported from the package index.
  */
 import { Canvas, D, drawTextOverEdges, L, R, STY_DOT, STY_SOLID, STY_THICK, U } from './canvas.ts'
 import { parseClass } from './diagrams/class.ts'
@@ -32,7 +31,16 @@ import type {
   Trace,
 } from './engine/types.ts'
 import type { Graph } from './graph.ts'
-import { fitLabel, MAX_LABEL, MAX_LINES, stripControls, WRAP_WIDTH, wrapLabel } from './labels.ts'
+import {
+  EDGE_WRAP,
+  EDGE_WRAP_NARROW,
+  fitLabel,
+  MAX_LABEL,
+  MAX_LINES,
+  stripControls,
+  WRAP_WIDTH,
+  wrapLabel,
+} from './labels.ts'
 import { drawBox, drawClassBox, half, headGlyph, MAX_CANVAS_CELLS, sat } from './layout.ts'
 import type { MermaidArt } from './types.ts'
 import { stringWidth } from './width.ts'
@@ -106,9 +114,38 @@ export function importGraph(graph: Graph): { input: LayoutInput; lines: string[]
       parent,
     })
   })
+  /** Balanced greedy wrap: fewest rows at `max`, then the narrowest
+   * width still fitting them — never below the longest word (wrapLabel
+   * would slice it). Deterministic: `drawLayout` re-wraps at the placed
+   * width and reproduces the lines, since every break happened because
+   * the next word overflowed a cap no smaller than the widest line. */
+  const balance = (t: string, max: number): { w: number; h: number } => {
+    const rows = Math.ceil(stringWidth(t) / max)
+    let lines = wrapLabel(t, max, rows + 1)
+    const word = Math.max(...t.split(/\s+/).map(stringWidth))
+    for (let wc = Math.max(word, Math.ceil(stringWidth(t) / rows)); wc < max; wc++) {
+      const cand = wrapLabel(t, wc, rows + 1)
+      if (cand.length <= rows) {
+        lines = cand
+        break
+      }
+    }
+    return { w: Math.max(...lines.map(stringWidth)), h: lines.length }
+  }
+  /** Labels are bare text — no space margins; the engine keeps them off
+   * foreign edges. The flat single line is the primary shape; a long
+   * centre label also offers a narrow block for hanging beside a
+   * vertical run and a balanced block for a floating body. */
   const measure = (text: string, at: InputLabel['at']): InputLabel => {
-    const t = fitLabel(text, MAX_LABEL)
-    return { text: t, w: stringWidth(t) + 2, h: 1, at }
+    if (at !== 'center') {
+      const t = fitLabel(text, MAX_LABEL)
+      return { text: t, w: Math.max(1, stringWidth(t)), h: 1, at }
+    }
+    const t = fitLabel(text, EDGE_WRAP * 3)
+    const out: InputLabel = { text: t, w: Math.max(1, stringWidth(t)), h: 1, at }
+    if (stringWidth(t) > EDGE_WRAP_NARROW) out.tall = balance(t, EDGE_WRAP_NARROW)
+    if (stringWidth(t) > EDGE_WRAP) out.block = balance(t, EDGE_WRAP)
+    return out
   }
   const edges = graph.edges.map((e, i) => {
     const labels: InputLabel[] = []
@@ -119,13 +156,33 @@ export function importGraph(graph: Graph): { input: LayoutInput; lines: string[]
     return { id: `e${i}`, from: end(e.from), to: end(e.to), labels }
   })
   const alt = graph.dir === 'right' || graph.dir === 'left' ? SPACING.down : SPACING.right
+  // a diagram with cardinalities (ER, class) carries rail annotations —
+  // card, verb, card beside the line — and reserves their room in every
+  // channel, a bit of size for labels that always land (user's call):
+  // stacked rows flowing down, or run length for the verb to anchor
+  // beside a sideways run
+  const spacing = { ...SPACING[graph.dir] }
+  if (graph.edges.some((e) => e.cardFrom !== undefined || e.cardTo !== undefined)) {
+    const sideways = graph.dir === 'right' || graph.dir === 'left'
+    let need = 0
+    for (const e of edges) {
+      const ls = e.labels ?? []
+      const verb = ls.find((l) => l.at === 'center')
+      const cards = ls.length - (verb === undefined ? 0 : 1)
+      need = Math.max(
+        need,
+        sideways ? Math.ceil((verb?.w ?? 0) / 2) + (cards > 0 ? 2 : 0) : (verb?.h ?? 0) + cards,
+      )
+    }
+    if (need > 0) spacing.channelMin = need
+  }
   return {
     input: {
       dir: graph.dir,
       nodes,
       edges,
       compounds,
-      spacing: SPACING[graph.dir],
+      spacing,
       altSpacing: alt,
     },
     lines,
@@ -206,7 +263,27 @@ export function drawLayout(graph: Graph, res: LayoutResult, lines: string[][]): 
   })
   canvas.curStyle = STY_SOLID
   for (const r of Object.values(res.edges)) {
-    for (const l of r.labels) drawTextOverEdges(canvas, ` ${l.text} `, l.x, l.y, 'edgeLabel')
+    for (const l of r.labels) {
+      if (l.h <= 1) {
+        drawTextOverEdges(canvas, l.text, l.x, l.y, 'edgeLabel')
+        continue
+      }
+      // a wrapped block (only ever beside its run — it covers no line):
+      // re-wrap at the placed width, rows left-aligned, hanging off the
+      // column like the sketch (`│this label` / `│wraps like`)
+      const lines = wrapLabel(l.text, l.w, l.h)
+      lines.forEach((ln, i) => {
+        drawTextOverEdges(canvas, ln, l.x, l.y + i, 'edgeLabel')
+      })
+    }
+  }
+  // floating bodies: the `[n]` prefix, then the wrapped text hanging off it
+  for (const f of res.floats ?? []) {
+    const pre = `[${f.n}] `
+    drawTextOverEdges(canvas, pre, f.x, f.y, 'edgeLabel')
+    wrapLabel(f.text, f.w - pre.length, f.h).forEach((ln, i) => {
+      drawTextOverEdges(canvas, ln, f.x + pre.length, f.y + i, 'edgeLabel')
+    })
   }
   graph.groups.forEach((g, i) => {
     const r = res.compounds[`g${i}`]
@@ -220,6 +297,48 @@ export function drawLayout(graph: Graph, res: LayoutResult, lines: string[][]): 
 function parse(src: string): Graph | null {
   const s = stripControls(src)
   return parseGraph(s) ?? parseState(s) ?? parseClass(s) ?? parseEr(s)
+}
+
+/**
+ * Compose the final art: the painted canvas, and above it a legend box
+ * for the labels that fit nowhere near their edge — `[n]` ties an entry
+ * to its marker, an entry without one names its edge's endpoints.
+ */
+function finishArt(canvas: Canvas, graph: Graph, res: LayoutResult): MermaidArt {
+  const body = canvas.toLines()
+  const warnings = [...graph.warnings, ...res.warnings]
+  const legend = res.legend ?? []
+  if (legend.length === 0) return { ...body, classDefs: graph.classDefs, warnings }
+  const name = (n: number): string => fitLabel(graph.nodes[n].label.split('\n')[0], 14)
+  const entries = legend.map((e) => {
+    const ge = graph.edges[Number(e.edge.slice(1))]
+    const key = e.n !== undefined ? `[${e.n}]` : `${name(ge.from)} → ${name(ge.to)}:`
+    return `${key} ${e.text}`
+  })
+  const w = Math.min(Math.max(...entries.map(stringWidth)) + 4, Math.max(res.width, 40))
+  const lc = new Canvas(w, entries.length + 2)
+  lc.set(0, 0, '┌', 'border')
+  lc.set(w - 1, 0, '┐', 'border')
+  lc.set(0, entries.length + 1, '└', 'border')
+  lc.set(w - 1, entries.length + 1, '┘', 'border')
+  for (let x = 1; x < w - 1; x++) {
+    lc.addBits(x, 0, L | R, 'border')
+    lc.addBits(x, entries.length + 1, L | R, 'border')
+  }
+  entries.forEach((entry, i) => {
+    lc.addBits(0, i + 1, U | D, 'border')
+    lc.addBits(w - 1, i + 1, U | D, 'border')
+    drawTextOverEdges(lc, fitLabel(entry, w - 4), 2, i + 1, 'edgeLabel')
+  })
+  lc.finalizeMask()
+  const head = lc.toLines()
+  return {
+    plain: [...head.plain, ...body.plain],
+    styled: [...head.styled, ...body.styled],
+    width: Math.max(head.width, body.width),
+    classDefs: graph.classDefs,
+    warnings,
+  }
 }
 
 /** The half of `renderEngine` before layout: source → engine input. The lab
@@ -244,11 +363,7 @@ export function renderEngine(
   const res = layout(input, opts, trace)
   const canvas = drawLayout(graph, res, lines)
   if (canvas === null) return null
-  return {
-    ...canvas.toLines(),
-    classDefs: graph.classDefs,
-    warnings: [...graph.warnings, ...res.warnings],
-  }
+  return finishArt(canvas, graph, res)
 }
 
 /** The lab's entry point: every phase snapshot plus the finished art. */
@@ -274,14 +389,7 @@ export function traceEngineFast(
   const snapshots: Snapshot[] = []
   const result = layoutFast(p.input, fit, (s) => snapshots.push(s))
   const canvas = drawLayout(p.graph, result, p.lines)
-  const art =
-    canvas === null
-      ? null
-      : {
-          ...canvas.toLines(),
-          classDefs: p.graph.classDefs,
-          warnings: [...p.graph.warnings, ...result.warnings],
-        }
+  const art = canvas === null ? null : finishArt(canvas, p.graph, result)
   return { snapshots, art }
 }
 
@@ -302,14 +410,7 @@ export function traceEngineFit(
   const snapshots: Snapshot[] = []
   const { result, candidates, chosen } = layoutBest(p.input, opts, fit, (s) => snapshots.push(s))
   const canvas = drawLayout(p.graph, result, p.lines)
-  const art =
-    canvas === null
-      ? null
-      : {
-          ...canvas.toLines(),
-          classDefs: p.graph.classDefs,
-          warnings: [...p.graph.warnings, ...result.warnings],
-        }
+  const art = canvas === null ? null : finishArt(canvas, p.graph, result)
   const label =
     candidates.find((c) => c.opts === chosen)?.label ?? `${candidates.length} candidates`
   return { snapshots, art, candidates, chosen: label }

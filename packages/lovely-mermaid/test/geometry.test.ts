@@ -49,6 +49,11 @@ function randomInput(seed: number): LayoutInput {
     const to = items[int(0, items.length - 1)]
     edges.push({ id: `e${i}`, from, to })
   }
+  for (const e of edges) {
+    if (r() < 0.2) e.labels = [{ text: 'lbl', w: int(3, 9), h: int(1, 2), at: 'center' }]
+    if (r() < 0.1)
+      e.labels = [...(e.labels ?? []), { text: 'c', w: 3, h: 1, at: r() < 0.5 ? 'tail' : 'head' }]
+  }
   const dirs = ['down', 'up', 'right', 'left'] as const
   return { dir: dirs[seed % 4], nodes, edges, compounds, spacing: { ...spacing } }
 }
@@ -148,6 +153,71 @@ describe('geometric soundness (seeded sweep)', () => {
               `edges ${a.id}/${b.id} share ${shared} cells (seed ${seed})\n${JSON.stringify(a)} ${JSON.stringify(res.edges[a.id].route)}\n${JSON.stringify(b)} ${JSON.stringify(res.edges[b.id].route)}`,
             )
         }
+      // 5. labels sit inside the canvas, off every box, frame border and
+      // other label, and cover no cell of a foreign edge
+      const plainCells = (route: Pt[]): Set<string> => {
+        const out = new Set<string>()
+        for (let i = 1; i < route.length; i++)
+          for (
+            let x = Math.min(route[i - 1][0], route[i][0]);
+            x <= Math.max(route[i - 1][0], route[i][0]);
+            x++
+          )
+            for (
+              let y = Math.min(route[i - 1][1], route[i][1]);
+              y <= Math.max(route[i - 1][1], route[i][1]);
+              y++
+            )
+              out.add(`${x},${y}`)
+        return out
+      }
+      const cellsById = new Map(
+        Object.entries(res.edges).map(([id, er]) => [id, plainCells(er.route)]),
+      )
+      const placedRects: { x: number; y: number; w: number; h: number }[] = []
+      for (const [id, er] of Object.entries(res.edges)) {
+        for (const l of er.labels) {
+          expect(l.x >= 0 && l.y >= 0 && l.x + l.w <= res.width && l.y + l.h <= res.height).toBe(
+            true,
+          )
+          const apart = (r2: { x: number; y: number; w: number; h: number }): boolean =>
+            l.x + l.w <= r2.x || r2.x + r2.w <= l.x || l.y + l.h <= r2.y || r2.y + r2.h <= l.y
+          for (const b of Object.values(boxes)) expect(apart(b)).toBe(true)
+          for (const q of placedRects) expect(apart(q)).toBe(true)
+          placedRects.push(l)
+          for (const [cid, cr] of Object.entries(res.compounds)) {
+            for (let x = l.x; x < l.x + l.w; x++)
+              for (let y = l.y; y < l.y + l.h; y++) {
+                const onBorder =
+                  ((x === cr.x || x === cr.x + cr.w - 1) && y >= cr.y && y < cr.y + cr.h) ||
+                  ((y === cr.y || y === cr.y + cr.h - 1) && x >= cr.x && x < cr.x + cr.w)
+                if (onBorder) throw new Error(`label on ${cid} border at ${x},${y} (seed ${seed})`)
+              }
+          }
+          for (const [oid, cells] of cellsById) {
+            if (oid === id) continue
+            for (let x = l.x; x < l.x + l.w; x++)
+              for (let y = l.y; y < l.y + l.h; y++)
+                if (cells.has(`${x},${y}`))
+                  throw new Error(`label of ${id} covers ${oid} at ${x},${y} (seed ${seed})`)
+          }
+        }
+      }
+      // 6. floats: in bounds, off everything — boxes, labels, every edge
+      for (const f of res.floats ?? []) {
+        expect(f.x >= 0 && f.y >= 0 && f.x + f.w <= res.width && f.y + f.h <= res.height).toBe(true)
+        const apart = (r2: { x: number; y: number; w: number; h: number }): boolean =>
+          f.x + f.w <= r2.x || r2.x + r2.w <= f.x || f.y + f.h <= r2.y || r2.y + r2.h <= f.y
+        for (const b of Object.values(boxes)) expect(apart(b)).toBe(true)
+        for (const q of placedRects) expect(apart(q)).toBe(true)
+        placedRects.push(f)
+        for (const [oid, cells] of cellsById) {
+          for (let x = f.x; x < f.x + f.w; x++)
+            for (let y = f.y; y < f.y + f.h; y++)
+              if (cells.has(`${x},${y}`))
+                throw new Error(`float of ${f.edge} covers ${oid} at ${x},${y} (seed ${seed})`)
+        }
+      }
       void isAncestor
     })
   }

@@ -21,6 +21,7 @@
  * short of the stack's far flow border.
  */
 import type { LEdge, LGraph, LNode, LPort } from './graph.ts'
+import { portPitch, sideWidth } from './graph.ts'
 import type { PlacedLabel, Pt, Rect } from './types.ts'
 
 export interface StackMember {
@@ -132,12 +133,16 @@ export function stackChains(
           return loop(p) - loop(q)
         })
     // members widen for their busiest external side, same pitch rule
-    // as the main widening pass (which skips stacks)
+    // as the main widening pass (which skips stacks) — end-label room
+    // included, so a stacked hub's fan keeps its card cells
     let off = 0
     const sm: StackMember[] = []
     for (const m of members) {
-      const k = Math.max(sidePorts(m, 'S').length, sidePorts(m, 'N').length)
-      const w = Math.max(m.w, k > 0 ? (k - 1) * (1 + edgeEdge) + 3 : 0)
+      const w = Math.max(
+        m.w,
+        sideWidth(sidePorts(m, 'S'), edgeEdge),
+        sideWidth(sidePorts(m, 'N'), edgeEdge),
+      )
       sm.push({ id: m.id, off, w, h: m.h })
       off += w + gap
     }
@@ -164,12 +169,20 @@ export function stackChains(
       const slotHi = sm[i].off + sm[i].w - 2
       for (const side of ['S', 'N'] as const) {
         const ps = sidePorts(m, side)
+        // chain the ports at their per-port pitches (the card room the
+        // widening reserved — tunePorts skips fixed ports, so the
+        // spread must keep it), centred in the slot
+        const pa = ps.map((p) => portPitch(p, edgeEdge))
+        let need = 0
+        for (let j = 0; j + 1 < ps.length; j++) need += pa[j]
+        let x =
+          ps.length === 1 || slotHi <= slotLo
+            ? sm[i].off + (sm[i].w >> 1)
+            : Math.max(slotLo, Math.min(slotHi - need, slotLo + ((slotHi - slotLo - need) >> 1)))
         for (let j = 0; j < ps.length; j++) {
           const p: LPort = ps[j]
-          p.pos =
-            ps.length === 1 || slotHi <= slotLo
-              ? sm[i].off + (sm[i].w >> 1)
-              : slotLo + Math.round((j * (slotHi - slotLo)) / (ps.length - 1))
+          p.pos = x
+          x += pa[j]
           p.fixed = true
           p.node = sup
           sup.ports.push(p)

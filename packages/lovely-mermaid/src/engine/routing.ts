@@ -25,10 +25,13 @@
  * the median of their partners' port columns, so a slack row centres
  * over its connections instead of sitting wherever packing left it.
  *
- * Phase 6, labels, is still a pass-through. `joinRoutes` is plumbing.
+ * Phase 6, labels, stays a pass-through here: placement runs once,
+ * post-export, on the final orientation (`engine/labels.ts` — text is
+ * horizontal in the caller's frame, not in this one). `joinRoutes` is
+ * plumbing.
  */
 import type { LEdge, LGraph, LNode, LPort } from './graph.ts'
-import { cloneGraph } from './graph.ts'
+import { cloneGraph, portPitch } from './graph.ts'
 import { gap } from './placement.ts'
 import type { LabelOptions, Pt, RoutingOptions } from './types.ts'
 
@@ -91,10 +94,12 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
       ch.first = y + gapRows
       // a trackless channel is one shared row; when both bands wrap
       // self-loops into it, their legs would coincide — give it two
-      y +=
+      y += Math.max(
+        g.spacing.channelMin ?? 0,
         ch.tracks === 0
           ? 1 + (maxLoops(l) > 0 && maxLoops(l + 1) > 0 ? 1 : 0)
-          : ch.tracks + 2 * gapRows
+          : ch.tracks + 2 * gapRows,
+      )
       y += extraLoops(l + 1)
     }
   }
@@ -167,7 +172,6 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
  * — the loop ends stay last so their east wrap stays intact.
  */
 function tunePorts(g: LGraph): void {
-  const pitch = 1 + g.spacing.edgeEdge
   for (const n of g.nodes) {
     if (n.kind !== 'node' || n.w <= 2) continue
     for (const side of ['N', 'S'] as const) {
@@ -179,8 +183,12 @@ function tunePorts(g: LGraph): void {
       const ps = all.filter((p) => !isLoop(p))
       if (ps.length === 0) continue
       const loops = all.filter(isLoop)
+      // per-port pitch to the successor: the channel pitch, or the room
+      // this port's end label reserved beside its line (`│1..* │`)
+      const pa = ps.map((p) => portPitch(p, g.spacing.edgeEdge))
       const lo = 1
-      const hi = loops.length > 0 ? Math.min(...loops.map((p) => p.pos)) - pitch : n.w - 2
+      const hi =
+        loops.length > 0 ? Math.min(...loops.map((p) => p.pos)) - pa[pa.length - 1] : n.w - 2
       if (hi < lo) continue
       const want = ps.map((p) => {
         const anchors: number[] = []
@@ -197,23 +205,21 @@ function tunePorts(g: LGraph): void {
       // every port at full pitch, the fitting below would clamp the tail
       // onto one shared cell and the router would merge unrelated edges
       // into a single column
-      if (lo + (ps.length - 1) * pitch > hi) continue
+      const suffix: number[] = new Array(ps.length).fill(0)
+      for (let i = ps.length - 2; i >= 0; i--) suffix[i] = suffix[i + 1] + pa[i]
+      if (lo + suffix[0] > hi) continue
       // a move is worth it only when it lands exactly on the partner's
       // column and straightens the wire — a near miss keeps the same
       // bend count but parks the kink right at the border, which reads
       // worse than the default centred port with its bend mid-channel;
       // each position is capped so the ports after it still fit at pitch
       const xs: number[] = []
-      let prev = lo - pitch
       for (let i = 0; i < ps.length; i++) {
-        const cap = hi - (ps.length - 1 - i) * pitch
+        const minX = i === 0 ? lo : xs[i - 1] + pa[i - 1]
+        const cap = hi - suffix[i]
         const exact = want[i]
-        const x =
-          exact >= Math.max(lo, prev + pitch) && exact <= cap
-            ? exact
-            : Math.min(cap, Math.max(ps[i].pos, prev + pitch))
+        const x = exact >= minX && exact <= cap ? exact : Math.min(cap, Math.max(ps[i].pos, minX))
         xs.push(x)
-        prev = x
       }
       ps.forEach((p, i) => {
         p.pos = xs[i]

@@ -44,8 +44,14 @@ export interface InputCompound {
 
 export interface InputLabel {
   text: string
+  /** the flat single-line shape — what most placements use */
   w: number
   h: number
+  /** hard-wrapped narrow block, used beside a vertical run where the
+   * lines hang off the column (`│this label` / `│wraps like` …) */
+  tall?: { w: number; h: number }
+  /** balanced block for a floating body */
+  block?: { w: number; h: number }
   at: 'center' | 'tail' | 'head'
 }
 
@@ -70,6 +76,10 @@ export interface Spacing {
   channelGap: number
   /** cross-axis units between a frame's border and what is beside it */
   framePad: number
+  /** minimum flow-axis rows per channel, even when every edge is
+   * straight — a caller whose edges carry rail annotations (ER
+   * cardinalities + verb beside the line) reserves their room here */
+  channelMin?: number
 }
 
 export interface LayoutInput {
@@ -168,6 +178,14 @@ export interface LayoutResult {
   /** Per input edge that was routed: the polyline from source to target,
    * port cell to port cell, plus every label the engine found room for. */
   edges: Record<string, { route: Pt[]; labels: PlacedLabel[] }>
+  /** Labels that fit nowhere on their edge but found dead space nearby:
+   * a `[n]` marker sits on the edge (in its `labels`) and the body —
+   * the marker prefix plus the wrapped text — floats at this rect. */
+  floats?: { n: number; edge: string; text: string; x: number; y: number; w: number; h: number }[]
+  /** Labels with no room even for a float: the caller renders these
+   * above the diagram. `n` ties an entry to its `[n]` marker; an entry
+   * without one names its edge's endpoints instead. */
+  legend?: { n?: number; edge: string; text: string }[]
   warnings: string[]
   /** squeeze iterations that were kept, when geometry feedback ran */
   squeezed?: number

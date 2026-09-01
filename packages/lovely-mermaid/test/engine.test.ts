@@ -104,7 +104,7 @@ describe('engine pipeline', () => {
       { id: 'n0', label: 'Start', w: 9, h: 3 },
       { id: 'n1', label: 'Parse', w: 9, h: 3 },
     ])
-    expect(li.edges[1].labels).toEqual([{ text: 'ok', w: 4, h: 1, at: 'center' }])
+    expect(li.edges[1].labels).toEqual([{ text: 'ok', w: 2, h: 1, at: 'center' }])
     const art = renderEngine(src)
     expect(art).not.toBeNull()
     const plain = (art as { plain: string[] }).plain.join('\n')
@@ -119,8 +119,10 @@ describe('er direction', () => {
     const lr = renderEngine('erDiagram\n direction LR\n A ||--o{ B : has\n B ||--o{ C : has')
     const tb = renderEngine('erDiagram\n A ||--o{ B : has\n B ||--o{ C : has')
     if (lr === null || tb === null) throw new Error('render failed')
-    // LR runs wider than tall, TB the other way around
+    // LR runs wider than tall, TB the other way around (the LR art may
+    // carry a legend box above the diagram — compare the widest rows)
+    const w = (a: { plain: string[] }): number => Math.max(...a.plain.map((l) => l.length))
     expect(lr.plain.length).toBeLessThan(tb.plain.length)
-    expect(lr.plain[0].length).toBeGreaterThan(tb.plain[0].length)
+    expect(w(lr)).toBeGreaterThan(w(tb))
   })
 })

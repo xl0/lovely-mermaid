@@ -63,5 +63,8 @@ export interface SEdge {
   reversed?: boolean
   /** Polyline in units, endpoints on the port cells. */
   route?: Pt[]
+  /** An unplaced label: drawn as a chip at the route's midpoint. */
   label?: { text: string; x?: number; y?: number; w?: number; h?: number }
+  /** Placed labels (the flat result picture), rects in unit cells. */
+  labels?: { text: string; x: number; y: number; w: number; h: number }[]
 }

@@ -88,8 +88,9 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
                           placement.ts, routing.ts, simplex.ts (network simplex core
                           shared by layering and placement), stack.ts (hybrid
                           flow: chain contraction into cross-axis stacks),
-                          index.ts (layout(): the phases in order, direction
-                          transform, export)
+                          labels.ts (post-export label placement on the final
+                          orientation), index.ts (layout(): the phases in
+                          order, direction transform, export)
     layout-engine.ts      the mermaid bridge: Graph -> LayoutInput (cells, measured
                           labels), LayoutResult -> Canvas; renderEngine / traceEngine.
                           Not in the package index; the demo aliases it as
@@ -287,8 +288,60 @@ routing draws a miniature cycle — out the bottom border, around the east
 side, back in through the top (a first-layer loop pushes the bands down
 by its wrap rows; stacked loops warn, they may cross tracks); `A --> G`
 from inside G becomes a loop wrapping the frame.
-**labels** is still a pass-through. `docs/elk-layered.md`
-ch. 8 lists what remains.
+**labels** (2026-09-01): the in-pipeline phase stays a pass-through —
+placement runs once, post-export, on the final orientation
+(`engine/labels.ts`), where "horizontal" means what the reader sees.
+Obstacle model: node cells + frame borders + placed labels (1-cell
+moat) are solid; a per-cell distinct-edge count plus each edge's own
+cell set give the coverage and spacing tests. Centre labels walk a
+tier ladder (score = tier + route distance from source, sliding along
+each run): embedded in a horizontal run (h=1, interiors only, 2 cells
+reserved at route ends for port + arrowhead) → beside a horizontal run
+(above first, min overlap = half the shorter of label and run) →
+beside a vertical run touching its column (the rail look, right side
+first) → a block interrupting the vertical run (centred, or flush
+against the column when the centre is crowded). Labels are BARE
+text — no space margins; the one hard rule is never TOUCHING a
+foreign edge, except embedded in a horizontal run where a touching
+neighbour costs +200 instead (the interrupt reads clearly). Head/tail labels (ER cardinalities) sit beside the
+line right at their port — port proximity dominates their cost and
+touching a neighbouring line is a penalty, not fatal (a hub fan
+reads as one uniform row of cards) — else embed on the end run;
+their misses warn and drop. One edge's labels form a rail and may
+stack touching vertically (a horizontal moat stays on while the edge
+is annotated, so text never concatenates); the full moat applies
+between edges. Embedded text takes soft nudges to keep a cell of
+line before mid-route kinks (route ends exempt) and crossings. A
+cardinality-carrying diagram reserves annotation room up front on
+both axes, per port: `portCard`/`portPitch`/`sideWidth` (graph.ts) —
+each port records its widest end label (`LPort.card`, before splitting
+move labels off far segments) and owes `cardW + 2` to its successor;
+a side's width is the sum of per-port pitches (less the smallest),
+tunePorts enforces the chain with suffix-sum caps, stack members
+widen the same way and their pinned spread chains the same pitches —
+and
+`Spacing.channelMin` floors every channel (bridge-computed from the
+measured labels; straight channels no longer collapse under it). A missed CENTRE label never warns: a `[n]` marker embeds
+through the same ladder, its body floats in dead space within
+FLOAT_R 12 (`LayoutResult.floats`), else the label joins
+`LayoutResult.legend` (`[n]`-keyed with a marker, endpoint-keyed
+without one). The bridge
+pre-wraps centre labels > EDGE_WRAP (18) into a balanced block (never
+narrower than the longest word) and re-wraps at the placed width to
+draw — greedy wrap at the max line width reproduces the lines. A
+wrapped label also carries `flatW`, its unwrapped width: tier 1 scans
+the flat shape, so a horizontal run that holds the whole label embeds
+it flat instead of wrapping. Markers draw unpadded (their rect is as
+wide as the bare text), floats as `[n] ` plus hanging wrapped lines,
+and the legend renders as a box prepended above the canvas lines
+(`finishArt` — plain/styled arrays concatenated, no geometry offset).
+The flat lab picture carries the placed
+rects (`SEdge.labels`, floats included) and /lab draws them as
+borderless grid cells — text split into the block's rows and spread
+to the cell pitch (`wrapCells` + `textLength`), so it sits on the
+grid the way terminal output will; phase snapshots keep the midpoint
+text chip (`SEdge.label`).
+`docs/elk-layered.md` ch. 8 lists what remains.
 
 Compound graphs (2026-08-30): **recursive, ELK's way** — the global
 Sander/dagre scheme (frames as constraints on one layering) was built
