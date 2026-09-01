@@ -18,3 +18,22 @@ erDiagram
    │ LINE │
    └──────┘
 ```
+
+A colon inside a quoted alias is label text, not the verb separator.
+
+```mermaid
+erDiagram
+  p["a:b"] ||--o{ q : rel
+```
+
+```text
+ ┌─────┐
+ │ a:b │
+ └──┬──┘
+    │1
+    │rel
+    │*
+  ┌───┐
+  │ q │
+  └───┘
+```

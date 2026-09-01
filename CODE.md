@@ -781,6 +781,15 @@ title row centres, the rest left-align.
   Upstream folds everything into one mid-edge string, so nothing says which
   end a number belongs to. ER aliases are also parsed quote-aware, so
   `a["Bank Account"]` renders instead of failing.
+- **2026-09-01 parser fixes** (post-cutoff, `REVIEW-ENGINE.md` P1-P4):
+  subgraph membership follows mermaid's block claims (a top-level mention
+  never claims a node; the first closing block that mentions it does, so
+  an inner block beats its outer ones — was first-declaration-wins);
+  lean bracket shapes `[/x/]` `[\x\]` `[/x\]` `[\x/]` and the double
+  circle `(((x)))` clean their delimiters from the label (silhouettes
+  stay rect/round); `~~~` invisible links parse and draw nothing,
+  v11.3 edge ids (`A e1@--> B`) are skipped instead of costing the
+  statement; the ER verb colon is quote-aware (`p["a:b"]` aliases).
 - **2026-08-15 review fixes** (post-cutoff, `REVIEW.md`): kebab-case
   flowchart ids; `class A["Label"]`; state labels containing `-->`; state
   descriptions accumulate; sequence `-x`/`-)` need a token boundary

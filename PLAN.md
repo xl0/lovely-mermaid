@@ -549,6 +549,18 @@ positions; BK picks the smallest of four layouts; no RNG. Compound
 handling was re-decided afterwards as one global layout (see CODE.md),
 replacing ch. 8's recursive hybrid. Still deferred: package split.
 
+## [x] Parser fixes (2026-09-01, REVIEW-ENGINE.md P1-P4)
+
+Subgraph membership now matches mermaid's block-claim semantics (verified
+against mermaid's own flowDb `makeUniq`: first closing block wins, inner
+beats outer, top level never claims — the review's "last block wins" was
+wrong for the installed mermaid); lean/trapezoid/double-circle labels
+clean their delimiters; `~~~` parses invisibly and `e1@` edge ids are
+skipped; the ER verb colon is quote-aware. Goldens: one legitimate
+update (a node joining its mentioning block) + four new regression
+cases. Left as recorded corners (P5): subgraph-id-as-labeled-node,
+state history/fork pseudostates, ER word cardinalities, `@{ animate }`.
+
 ## Open questions
 
 - Parked ideas with data: truncating sequence message text at `MAX_LABEL`,

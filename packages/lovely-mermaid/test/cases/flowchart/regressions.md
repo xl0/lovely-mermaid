@@ -198,3 +198,86 @@ flowchart TD
             │ Verified result │
             └─────────────────┘
 ```
+
+Membership follows mermaid's block claims: a top-level mention never claims
+a node, the first closing block that mentions it does (mermaid's own
+subgraph docs example — `a2` belongs to `one`, `c1` to `three`).
+
+```mermaid
+flowchart TB
+    c1-->a2
+    subgraph one
+    a1-->a2
+    end
+    subgraph three
+    c1-->c2
+    end
+```
+
+```text
+┌ three ─┐
+│ ┌────┐ │
+│ │ c1 │ │
+│ └──┬─┘ │
+│    │   │
+│    ▼   │
+│ ┌────┐ │
+│ │ c2 │ │
+│ └────┘ │
+└────┬───┘
+     │
+     ▼
+┌ one ───┐
+│ ┌────┐ │
+│ │ a1 │ │
+│ └──┬─┘ │
+│    │   │
+│    ▼   │
+│ ┌────┐ │
+│ │ a2 │ │
+│ └────┘ │
+└────────┘
+```
+
+Lean bracket shapes drop their slashes from the label, and a double circle
+reads whole: `[/x/]` `[\x\]` `[/x\]` `[\x/]` `(((x)))`.
+
+```mermaid
+flowchart LR
+  A[/para/] --> B[\alt\]
+  C[/lean\] --> D[\lean2/]
+  E(((ring))) --> A
+```
+
+```text
+┌──────┐    ┌───────┐
+│ lean ├───▶│ lean2 │
+└──────┘    └───────┘
+
+╭──────╮    ┌──────┐     ┌─────┐
+│ ring ├───▶│ para ├────▶│ alt │
+╰──────╯    └──────┘     └─────┘
+```
+
+An invisible link `~~~` spaces its nodes without drawing an edge, and a
+v11.3 edge id (`e1@`) is skipped rather than costing the statement.
+
+```mermaid
+flowchart LR
+  A ~~~ B
+  X e1@--> Y
+```
+
+```text
+┌───┐
+│ A │
+└───┘
+
+┌───┐
+│ B │
+└───┘
+
+┌───┐    ┌───┐
+│ X ├───▶│ Y │
+└───┘    └───┘
+```

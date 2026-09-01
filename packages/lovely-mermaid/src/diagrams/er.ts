@@ -10,7 +10,7 @@ import { Graph, type LineKind, MAX_MEMBERS, type Node, parseDir } from '../graph
 import { cleanLabel, decodeHtmlEntities, displayGenerics } from '../labels.ts'
 import { layoutClass } from '../layout.ts'
 import type { Diagram } from '../registry.ts'
-import { headerKind, nonEmpty, splitOnce, statementsOf, words } from '../statements.ts'
+import { headerKind, nonEmpty, quoteMask, statementsOf, words } from '../statements.ts'
 
 export const er: Diagram = {
   kind: 'er',
@@ -140,9 +140,25 @@ function erTokens(s: string): string[] {
 }
 
 function splitErRelationship(st: string): { rel: string; label: string | null } | null {
-  const split = splitOnce(st, ':')
-  const rel = split ? split[0] : st
-  const label = split ? split[1].trim() : null
+  // the verb's colon must sit outside quotes: a `:` inside a quoted
+  // alias (`p["a:b"] ||--o{ q : rel`) is label text, not the separator
+  const chars = [...st]
+  const mask = quoteMask(chars)
+  let cut = -1
+  for (let i = 0; i < chars.length; i++) {
+    if (chars[i] === ':' && mask[i] === 0) {
+      cut = i
+      break
+    }
+  }
+  const rel = cut === -1 ? st : chars.slice(0, cut).join('')
+  const label =
+    cut === -1
+      ? null
+      : chars
+          .slice(cut + 1)
+          .join('')
+          .trim()
   return erTokens(rel).some((t) => parseErOp(t) !== null) ? { rel, label } : null
 }
 

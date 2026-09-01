@@ -181,6 +181,7 @@ function parseStatement(st: string, graph: Graph): void {
     }
     i = target.next
     for (const f of prev) {
+      if (link.invisible === true) break
       for (const t of target.group) {
         // `A <-- B` reads right-to-left: swap the endpoints so the arrow that
         // was written on the left becomes a normal forward head.
@@ -250,6 +251,21 @@ function parseNode(
   }
   const index = graph.nodeIndex(id, shaped.label, shaped.shape)
   if (index === null) return null
+  // mermaid claims a node for the first *block* that closes around a
+  // mention: a top-level mention never claims, blocks beat the top
+  // level, and an inner block beats the outer ones (it closes first).
+  // At mention time that is: claim when unclaimed or held by an
+  // enclosing block. (Flowchart only — state composites scope by
+  // declaration.)
+  if (graph.curGroup !== null && graph.nodeGroup[index] !== graph.curGroup) {
+    const held = graph.nodeGroup[index]
+    let enclosing = held === null
+    for (let p = graph.groups[graph.curGroup].parent; p !== null && !enclosing; ) {
+      if (p === held) enclosing = true
+      p = graph.groups[p].parent
+    }
+    if (enclosing) graph.nodeGroup[index] = graph.curGroup
+  }
 
   // `id:::name` (after any shape) attaches an author class to the node —
   // upstream drops the rest of the line here.
@@ -281,31 +297,37 @@ function readShapeAt(chars: string[], i: number): Shaped {
   const c = chars[i]
   const n = chars[i + 1]
   if (c === '[') {
-    if (n === '[') return readShape(chars, i + 2, ']]', 'rect')
-    if (n === '(') return readShape(chars, i + 2, ')]', 'round')
-    return readShape(chars, i + 1, ']', 'rect')
+    if (n === '[') return readShape(chars, i + 2, [']]'], 'rect')
+    if (n === '(') return readShape(chars, i + 2, [')]'], 'round')
+    // parallelograms and trapezoids: `[/x/]` `[\x\]` `[/x\]` `[\x/]` —
+    // a lean opener may close with either slash, and the slashes are
+    // silhouette, not label
+    if (n === '/' || n === '\\') return readShape(chars, i + 2, ['/]', '\\]'], 'rect')
+    return readShape(chars, i + 1, [']'], 'rect')
   }
   if (c === '(') {
-    if (n === '(') return readShape(chars, i + 2, '))', 'round')
-    if (n === '[') return readShape(chars, i + 2, '])', 'round')
-    return readShape(chars, i + 1, ')', 'round')
+    if (n === '(' && chars[i + 2] === '(') return readShape(chars, i + 3, [')))'], 'round')
+    if (n === '(') return readShape(chars, i + 2, ['))'], 'round')
+    if (n === '[') return readShape(chars, i + 2, ['])'], 'round')
+    return readShape(chars, i + 1, [')'], 'round')
   }
   if (c === '{') {
-    if (n === '{') return readShape(chars, i + 2, '}}', 'diamond')
-    return readShape(chars, i + 1, '}', 'diamond')
+    if (n === '{') return readShape(chars, i + 2, ['}}'], 'diamond')
+    return readShape(chars, i + 1, ['}'], 'diamond')
   }
-  if (c === '>') return readShape(chars, i + 1, ']', 'rect')
+  if (c === '>') return readShape(chars, i + 1, [']'], 'rect')
   return { shape: 'rect', label: null, after: i }
 }
 
 /**
- * Read label text up to `closer`.
+ * Read label text up to the first of `closers` (a lean shape closes with
+ * either slash before its `]`).
  *
  * Quoting is decided by the first non-space character: inside a quoted label
  * the closer is ignored until the quote closes, so `A["a] b"]` is one node.
  * An unquoted label ends at the first closer, so `A[5" pipe]` keeps its quote.
  */
-function readShape(chars: string[], start: number, closer: string, shape: Shape): Shaped {
+function readShape(chars: string[], start: number, closers: string[], shape: Shape): Shaped {
   let j = start
   while (chars[j] === ' ' || chars[j] === '\t') j++
   const quoted = chars[j] === '"'
@@ -321,15 +343,18 @@ function readShape(chars: string[], start: number, closer: string, shape: Shape)
       i++
       continue
     }
-    if (!inQuotes && chars.slice(i, i + closer.length).join('') === closer) {
-      return { shape, label: cleanLabel(text), after: i + closer.length }
+    if (!inQuotes) {
+      const closer = closers.find((k) => chars.slice(i, i + k.length).join('') === k)
+      if (closer !== undefined) {
+        return { shape, label: cleanLabel(text), after: i + closer.length }
+      }
     }
     text += c
     i++
   }
   // Ran off the end still looking for the closer: everything after the opening
   // bracket became label text, so any link operator in it was swallowed.
-  return { shape, label: cleanLabel(text), after: chars.length, unclosed: closer }
+  return { shape, label: cleanLabel(text), after: chars.length, unclosed: closers[0] }
 }
 
 /**
@@ -420,6 +445,8 @@ interface Link {
   line: LineKind
   label: string | null
   next: number
+  /** a `~~~` spacing link: the nodes parse, no edge is drawn */
+  invisible?: boolean
 }
 
 /**
@@ -430,6 +457,20 @@ interface Link {
  */
 function parseLink(chars: string[], start: number): Link | null {
   let i = skipSpaces(chars, start)
+  // A v11.3 edge id (`A e1@--> B`) names the edge for styling; nothing a
+  // terminal can use, so it is skipped rather than costing the statement.
+  let at = i
+  while (at < chars.length && isIdChar(chars[at])) at++
+  if (at > i && chars[at] === '@' && (isLinkChar(chars[at + 1]) || chars[at + 1] === '~')) {
+    i = at + 1
+  }
+  // `~~~` is an invisible spacing link — a layout hint, parsed and not drawn
+  if (chars[i] === '~') {
+    let k = i
+    while (k < chars.length && chars[k] === '~') k++
+    if (k - i < 3) return null
+    return { left: 'none', right: 'none', line: 'solid', label: null, next: k, invisible: true }
+  }
   let left: Head = 'none'
   // A leading `o`/`x` decorates the tail, but only directly before an operator.
   if (
