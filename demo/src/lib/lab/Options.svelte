@@ -46,6 +46,12 @@
 		else next.squeeze = Number(raw);
 		value = next;
 	}
+	function setStack(on: boolean) {
+		const next = { ...value };
+		if (on) next.stackChains = true;
+		else delete next.stackChains;
+		value = next;
+	}
 </script>
 
 <div class="options">
@@ -61,6 +67,12 @@
 		placeholder="off"
 		value={value.squeeze ?? ''}
 		onchange={(e) => setSqueeze(e.currentTarget.value)}
+	/>
+	<span class="key">stackChains</span>
+	<input
+		type="checkbox"
+		checked={value.stackChains === true}
+		onchange={(e) => setStack(e.currentTarget.checked)}
 	/>
 	{#each phases as phase}
 		{#each Object.entries(schema[phase]) as [key, spec]}

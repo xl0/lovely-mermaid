@@ -267,33 +267,84 @@ per band) + channels; the longest dependency path is a hard floor
 Caller height is unconstrained (terminals scroll), which makes LR
 easier than TB once the right lever exists.
 
-- [x] LR-1 Corpus + honesty (2026-09-01): rotated variants
-      arch-state-lr (1074×79!), arch-system-lr (749×66),
-      state-regions-lr (118×21) in examples/; ER learned `direction`
-      (mermaid 10.5+) — arch-session-er-lr renders 197×70, narrower
-      AND shorter than its TB twin. `flowFloor`: recursive per-scope longest
-      path (node flow sizes + hops, compounds contribute their own
-      floor + border); the sideways warning quotes it — arch-classes
-      "needs ≈282 columns". The input-direction estimate can exceed
-      the achieved width when cycle breaking shortens paths
-      (arch-state-lr: est 1663 vs achieved 1074) — the warning then
-      falls back to "narrowest found". Wrap targets for LR-3:
-      1074→~250 (4-5 strips), 749→~200, 317→~170 (2 strips).
+- [x] LR-1 Corpus + honesty (2026-09-01): rotated variants in
+      examples/ (arch-state-lr, arch-system-lr, state-regions-lr); ER
+      learned `direction` (mermaid 10.5+) — arch-session-er-lr renders
+      197×70, narrower AND shorter than its TB twin. The interim
+      `flowFloor` warning estimate is gone (the loop's achieved width
+      is the honest number).
+- [x] LR-3 Page wrap: built, tuned hard, REMOVED (2026-09-01). A
+      compositor cut the strip at content-free columns (DP minimizing
+      severed edges), stacked the pieces, rerouted cut edges through
+      margin lanes and gutter rows, compressed slack rows, ranked
+      severed counts — every refinement landed and the numbers fit
+      (arch-state-lr@250 reached 248×407), but the severed-edge
+      connectors were unreadable in practice on anything non-trivial
+      (user: "completely unreadable... don't bend the edges around to
+      compact"). Policy now: stacking is the only sideways fit
+      mechanism; a diagram that still misses warns and the caller
+      links out (see the escape hatch below). Wrap was built and
+      removed within one uncommitted stretch, so no history holds the
+      code; the load-bearing ideas were: one cut candidate per free
+      run (all its columns cross the same segments), lane nesting by
+      exit order, per-strip monotone row compression, pass-through
+      bus rows.
+- [x] LR-4 Hybrid flow / chain stacking (2026-09-01, user's idea):
+      `engine/stack.ts` — a chain of single-in/single-out nodes folds
+      into one band, members stacked along the cross axis
+      (top-to-bottom on an LR page): nodes drop directly under their
+      predecessor and the chain edges become straight vertical runs.
+      Contraction after cycle breaking: the chain becomes one
+      super-node sized for the members side by side; external edges
+      keep flow-side attachment through ports pinned over their
+      member's slot (fixed-pos, the compound-port machinery), so no
+      phase learns anything; export expands members, chain edges as
+      straight cross runs, stubs where a short member stops inside
+      the stack. Chains segment by size: plain members (cross ≤
+      SIMPLE 5) extend freely — a column of small boxes reads like a
+      list — larger ones only while the segment totals ≤ BULK 20, so
+      a header⤵entity pair stacks while all-large chains (class
+      compartments) split into singletons and stay flat. Compounds
+      and rims never chain; a self-loop node chains as a TAIL only
+      (the loop wraps past the stack's far border, exactly the free
+      side; `loops` transfers to the super, loop ports pin last on
+      their sides) — that let the ER hub with its parent
+      self-relation stack under its header (user's annotation).
+      Members widen at contraction for their busiest external side
+      (same pitch rule as the main widening pass, which skips
+      stacks), so a stacked hub keeps its fan's port cells. Chain
+      edges MAY carry labels — contraction drops them (labels phase
+      still pending; ER cardinalities land here too). `stackChains`
+      option (lab checkbox); layoutBest doubles its sideways cells
+      with `+stack` probes, layoutFast adds one stacked calibration
+      pass. Frames render as vertical pipelines inside the LR flow
+      (the sketch). OPPORTUNISTIC everywhere (user: "always apply it
+      as long as it does not grow the second axis"): every direction,
+      target or not, the two most promising candidates re-run stacked
+      and win only as a free lunch — down flow's width-first metric
+      rejects width growth on its own, a target's fits gate budgets
+      it, and sideways-without-target gets an explicit guard (a
+      stacked candidate may not exceed the best whole layout's
+      height; a pinned `stackChains` bypasses it). Segmentation keeps
+      all-small runs unlimited but charges every extension once a
+      bulky member is aboard (a tall head no longer drags the smalls
+      into one over-tall stack). TB free lunches are real:
+      arch-state uncapped 221×331 (stacked, ~90 rows shorter),
+      state-regions 46×54. Sideways corpus (stack-only fit):
+      state-regions-lr 88×29, arch-session-er-lr 174×79 (header⤵entry
+      stacked, fan intact), arch-state-lr floor 408, arch-system-lr
+      691 — targets below the floor warn, by policy. Possible refinements: mid-member
+      externals E/W (side ports), stacking short branches, labels on
+      chain edges.
+- [x] Escape hatch: the CONSUMER links oversize diagrams out (user's
+      call — a `viewerUrl` helper was built and dropped the same day).
+      The pieces already public: the demo's `/render/` viewer takes
+      the source deflate-raw+base64url in the URL, `toAnsi` emits
+      OSC 8 hyperlinks for `Span.href`.
 - [ ] LR-2 Flow packing: dispersal with a flow-extent objective
       (Σ band heights) — pack underfilled bands down to the path
       floor. Reuses packLayers/squeeze machinery with the transposed
       estimator. No-op for depth-dominated diagrams; wins on slack.
-- [ ] LR-3 Page wrap — the centerpiece. Post-transform compositor on
-      LayoutResult: cut the laid-out strip at band boundaries (never
-      through a frame), stack strips vertically, reroute cut-crossing
-      edges as reading-order connectors through the inter-strip gutter
-      (margin lanes reserved like loop wraps; their columns count
-      against the fit). Cut selection = small DP over band boundaries
-      minimizing crossing edges subject to strip width ≤ target. Loop:
-      wrap-into-2/3/… candidates ranked by the existing fits→height→
-      width metric; fast mode gets a single estimated wrap. Risks:
-      connector spaghetti when a cut severs many edges (the DP
-      objective), frames pinning cut points, labels (still deferred).
 
 - [x] Stranded nodes + channel overlap (2026-09-01). (a) A node whose
       ports are all south now sinks to its band's floor (CompactionOutcome

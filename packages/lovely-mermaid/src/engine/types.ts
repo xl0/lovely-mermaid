@@ -141,6 +141,11 @@ export interface LayoutOptions {
    * width already paid: admission follows the measured width instead of
    * the target (the accept guard still ratchets width down) */
   squeezeLoose?: boolean
+  /** hybrid flow: fold chains of single-in/single-out nodes into one
+   * band, the members stacked along the cross axis — trades cross
+   * extent for flow extent (the fit lever for a width-capped sideways
+   * layout; elsewhere the loop probes it and keeps only free lunches) */
+  stackChains?: boolean
   cycles?: CyclesOptions
   layering?: LayeringOptions
   ordering?: OrderingOptions

@@ -86,8 +86,10 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
                           lab's picture format), graph.ts (working model + import +
                           toSnapshot), cycles.ts, layering.ts, ordering.ts,
                           placement.ts, routing.ts, simplex.ts (network simplex core
-                          shared by layering and placement), index.ts (layout(): the
-                          phases in order, direction transform, export)
+                          shared by layering and placement), stack.ts (hybrid
+                          flow: chain contraction into cross-axis stacks),
+                          index.ts (layout(): the phases in order, direction
+                          transform, export)
     layout-engine.ts      the mermaid bridge: Graph -> LayoutInput (cells, measured
                           labels), LayoutResult -> Canvas; renderEngine / traceEngine.
                           Not in the package index; the demo aliases it as
@@ -381,6 +383,54 @@ weights, chains bend rather than hold columns) exist because diversity
 is cheap and each sole-wins somewhere: state-regions 58×55 → 45×59,
 arch-classes 314×96 → 314×85, arch-state uncapped 230×330 → 217×423
 (narrower but taller — the no-target metric is width-first).
+
+For **sideways flow** the target caps the flow axis, which no
+layering mechanism can shorten below the dependency path. The one
+mechanism is **chain stacking** (`stack.ts`, `stackChains` option): a
+chain of single-in/single-out nodes folds into ONE band, members
+stacked along the cross axis — each node drops directly under its
+predecessor and the chain edges become straight vertical runs
+(top-to-bottom on an LR page; hybrid flow, the user's sketch).
+Contraction after cycle breaking: the chain becomes a super-node
+holding the members side by side in the working frame; external edges
+keep their flow-side ports, *pinned over their member's slot* via the
+fixed-pos port machinery compounds already use, so no phase learns
+anything — the export expands member rects, chain edges as straight
+cross runs between neighbours, and a stub where a shorter member's
+border stops inside the stack. Chains segment by size: plain members
+(cross ≤ 5) extend a stack freely — a column of small boxes reads
+like a list — while larger ones join only while the segment's total
+cross stays within budget, so a header⤵entity pair stacks but
+all-large chains (class compartment boxes) split into singletons and
+stay flat; the SIMPLE(5)/BULK(20) budgets scale by the cross
+`nodeNode` gap, the caller's measure of axis density, so a TB stack
+spending columns (gap 3) gets 15/60 while LR rows (gap 1) keep 5/20.
+Compounds and rims never chain; a self-loop node chains as a tail
+only — the loop wraps past the stack's far border, its free side
+(`loops` transfers to the super, loop ports pin last). Members widen
+at contraction for their busiest external side (the main widening
+pass skips stacks), so a stacked hub keeps its fan's port cells.
+Chain edges may carry labels; contraction drops them while the
+labels phase is pending.
+`layoutBest` doubles its sideways probe cells with `+stack` variants
+(fits → height → width arbitrates; at loose targets the flat strip
+still wins on height) and `layoutFast` adds one stacked calibration
+pass. Stacking is also opportunistic everywhere else: every
+direction, target or not, the two most promising candidates re-run
+stacked and win only as a free lunch — a chain folding into cross
+extent other content already pays for (down flow's width-first
+metric rejects width growth by itself; a target's fits gate budgets
+it; sideways without a target gets an explicit guard: a stacked
+candidate may not exceed the best whole layout's height, bypassed
+when the caller pins `stackChains`). A sideways layout that still exceeds the target keeps the
+narrowest strip and warns — deliberately: a *page wrap* compositor
+(cut the strip, stack the pieces, reroute severed edges through
+margin lanes) was built, tuned through several rounds, and removed —
+the multi-bend connectors were unreadable in practice. The escape
+hatch for oversize diagrams is the consumer's: link out (the demo's
+`/render/` viewer takes the source deflate-raw+base64url in the URL,
+and `toAnsi` emits OSC 8 hyperlinks for `Span.href`) instead of
+bending edges around to compact.
 
 The bridge (`layout-engine.ts`) measures nodes from wrapped labels /
 compartments (no even-width forcing), turns `cardFrom`/`cardTo` into tail /

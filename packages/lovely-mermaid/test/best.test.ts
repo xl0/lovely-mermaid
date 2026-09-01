@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { layout, layoutBest, layoutFast } from '../src/engine/index.ts'
 import type { Snapshot } from '../src/engine/snapshot.ts'
+import type { Candidate } from '../src/engine/types.ts'
 import { inputOf } from './engine-helpers.ts'
 
 const wide = ['R>A', 'R>B', 'R>C', 'R>D', 'A(20)', 'B(20)', 'C(20)', 'D(20)']
@@ -9,12 +10,12 @@ describe('candidate loop', () => {
   test('searches free knobs, respects pinned ones, deterministically', () => {
     const input = inputOf(['A>B', 'B>C', 'C>A'])
     const a = layoutBest(input, { cycles: { strategy: 'dfs' } })
-    expect(a.candidates.length).toBe(3)
     for (const c of a.candidates) expect(c.label.startsWith('dfs+')).toBe(true)
     const b = layoutBest(input, { cycles: { strategy: 'dfs' } })
     expect(b.candidates).toEqual(a.candidates)
     const free = layoutBest(input)
-    expect(free.candidates.map((c) => c.label)).toEqual([
+    // the probe cells, then up to two opportunistic stacked probes
+    expect(free.candidates.slice(0, 7).map((c) => c.label)).toEqual([
       'greedy+bk',
       'greedy+networkSimplex',
       'greedy+ns2',
@@ -23,6 +24,7 @@ describe('candidate loop', () => {
       'dfs+ns2',
       'greedy2+networkSimplex',
     ])
+    for (const c of free.candidates.slice(7)) expect(c.label.endsWith('+stack')).toBe(true)
   })
 
   test('without a target the narrowest candidate wins', () => {
@@ -116,15 +118,115 @@ describe('fast mode', () => {
   })
 })
 
-describe('sideways fit honesty', () => {
-  test('a sideways target warns with the structural floor', () => {
-    const input = { ...inputOf(['A>B', 'B>C', 'C>D']), dir: 'right' as const }
-    const { result } = layoutBest(input, {}, { width: 10 })
+describe('sideways fit', () => {
+  const chain = ['A>B', 'B>C', 'C>D', 'D>E', 'E>F']
+
+  test('a chain stacks into the target instead of flowing wide', () => {
+    const input = { ...inputOf(chain), dir: 'right' as const }
+    const { result, candidates, chosen } = layoutBest(input, {}, { width: 18 })
+    expect(result.width).toBeLessThanOrEqual(18)
+    expect((candidates.find((c) => c.opts === chosen) as Candidate).label).toContain('+stack')
+    expect(result.warnings).toEqual([])
+  })
+
+  test('an unreachable target keeps the narrowest layout and warns', () => {
+    const input = { ...inputOf(chain), dir: 'right' as const }
+    const { result } = layoutBest(input, {}, { width: 4 })
+    expect(result.width).toBeGreaterThan(4)
     const warn = result.warnings.find((w) => w.includes('sideways'))
-    expect(warn).toBeDefined()
-    expect(warn).toMatch(/\d+ columns/)
-    // the quoted number never exceeds what the layout actually achieved
-    const n = Number((warn as string).match(/(\d+) columns/)?.[1])
-    expect(n).toBeLessThanOrEqual(result.width)
+    expect(warn).toContain(`${result.width} columns`)
+  })
+
+  test('fast mode stacks its calibration pass', () => {
+    const input = { ...inputOf(chain), dir: 'right' as const }
+    const fast = layoutFast(input, { width: 18 })
+    expect(fast.width).toBeLessThanOrEqual(18)
+  })
+})
+
+describe('opportunistic stacking', () => {
+  test('a free-lunch stack is adopted without a target: LR width drops, height holds', () => {
+    // T is tall, so the chain's 11-row stack hides under T's 25 rows
+    // (an LR row-spacing profile, as the bridge would pass)
+    const input = {
+      dir: 'right' as const,
+      spacing: { nodeNode: 1, nodeEdge: 0, edgeEdge: 0, channelGap: 1, framePad: 0 },
+      nodes: [
+        { id: 'T', w: 5, h: 25 },
+        { id: 'A', w: 5, h: 3 },
+        { id: 'B', w: 5, h: 3 },
+        { id: 'C', w: 5, h: 3 },
+      ],
+      edges: [
+        { id: 'ta', from: 'T', to: 'A' },
+        { id: 'ab', from: 'A', to: 'B' },
+        { id: 'bc', from: 'B', to: 'C' },
+      ],
+    }
+    const flat = layoutBest(input, { stackChains: false })
+    const { result, candidates, chosen } = layoutBest(input)
+    expect((candidates.find((c) => c.opts === chosen) as Candidate).label).toContain('+stack')
+    expect(result.width).toBeLessThan(flat.result.width)
+    expect(result.height).toBeLessThanOrEqual(flat.result.height)
+  })
+
+  test('a stack that pays height is rejected without a target', () => {
+    const input = { ...inputOf(['A>B', 'B>C', 'C>D', 'D>E']), dir: 'right' as const }
+    const { result, candidates, chosen } = layoutBest(input)
+    expect((candidates.find((c) => c.opts === chosen) as Candidate).label).not.toContain('+stack')
+    expect(result.height).toBe(3) // the flat chain stays a single row
+  })
+
+  test('a free-lunch stack is adopted in a down flow: height drops, width holds', () => {
+    // R pays the width (and is too bulky to join the stack itself),
+    // the chain stacks sideways under it
+    const input = inputOf(['R>A', 'A>B', 'B>C', 'R(80)'])
+    const flat = layoutBest(input, { stackChains: false })
+    const { result, candidates, chosen } = layoutBest(input)
+    expect((candidates.find((c) => c.opts === chosen) as Candidate).label).toContain('+stack')
+    expect(result.width).toBeLessThanOrEqual(flat.result.width)
+    expect(result.height).toBeLessThan(flat.result.height)
+  })
+})
+
+describe('chain stacking', () => {
+  test('a stacked chain runs down one band: full width becomes the widest node', () => {
+    const input = { ...inputOf(['A>B', 'B>C', 'C>D']), dir: 'right' as const }
+    const flat = layout(input)
+    const stacked = layout(input, { stackChains: true })
+    expect(stacked.width).toBeLessThan(flat.width)
+    expect(stacked.height).toBeGreaterThan(flat.height)
+    // members share the band's left edge and follow each other down
+    expect(stacked.nodes.B.x).toBe(stacked.nodes.A.x)
+    expect(stacked.nodes.B.y).toBeGreaterThan(stacked.nodes.A.y)
+    // each chain edge is one straight vertical drop
+    for (const id of ['e0', 'e1', 'e2']) {
+      const r = stacked.edges[id].route
+      expect(new Set(r.map(([x]) => x)).size).toBe(1)
+    }
+  })
+
+  test('a stub joins a short member to a route on the stack border', () => {
+    // Y is much narrower than X, so the stack is wider than Y and Y's
+    // outgoing route needs the stub to reach Y's own border
+    const input = { ...inputOf(['X>Y', 'Y>Z', 'W>Z', 'X(21)']), dir: 'right' as const }
+    const res = layout(input, { stackChains: true })
+    expect(res.width).toBeLessThan(layout(input).width) // the chain did stack
+    for (const e of input.edges) {
+      const r = res.edges[e.id].route
+      const src = res.nodes[e.from]
+      const dst = res.nodes[e.to]
+      const inside = (p: [number, number], n: { x: number; y: number; w: number; h: number }) =>
+        p[0] >= n.x && p[0] < n.x + n.w && p[1] >= n.y && p[1] < n.y + n.h
+      expect(inside(r[0], src)).toBe(true)
+      expect(inside(r[r.length - 1], dst)).toBe(true)
+    }
+  })
+
+  test('the loop probes stacked cells for a capped sideways layout', () => {
+    const input = { ...inputOf(['A>B', 'B>C', 'C>D', 'D>E', 'A>E']), dir: 'right' as const }
+    const { result, candidates } = layoutBest(input, {}, { width: 22 })
+    expect(candidates.some((c) => c.label.includes('+stack'))).toBe(true)
+    expect(result.width).toBeLessThanOrEqual(22)
   })
 })

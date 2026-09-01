@@ -27,6 +27,8 @@ import { orderNodes } from './ordering.ts'
 import { placeNodes } from './placement.ts'
 import { dedupe, joinRoutes, placeLabels, routeEdges } from './routing.ts'
 import type { SEdge, SNode, Snapshot } from './snapshot.ts'
+import type { Stack } from './stack.ts'
+import { expandStacks, stackChains } from './stack.ts'
 import type {
   Candidate,
   CyclesOptions,
@@ -232,6 +234,15 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
     emit(g, 'import')
     g = breakCycles(g, opts.cycles ?? {})
     emit(g, 'cycles')
+    const childIdSet = new Set(children.map((c) => c.id))
+    // hybrid flow: fold chains into cross-axis stacks (one band each)
+    // before anything reads the graph's shape; the phases see one
+    // ordinary node per stack, with its external ports pinned over the
+    // member slots, and the export expands it back
+    const stacks =
+      opts.stackChains === true
+        ? stackChains(g, sp.nodeNode, sp.edgeEdge, childIdSet)
+        : new Map<string, Stack>()
     const levels = new Map<string, Level>()
     const lopts: LayeringOptions = opts.layering ?? {}
     if (opts.until !== 'cycles') {
@@ -239,9 +250,8 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
       // parallel edges (a cell per edge plus `edgeEdge` between, corners
       // never usable): now that cycle breaking has fixed which side each
       // edge uses, widen any node too narrow for its busiest side.
-      const childIdSet = new Set(children.map((c) => c.id))
       for (const n of g.nodes) {
-        if (n.kind !== 'node' || childIdSet.has(n.id)) continue
+        if (n.kind !== 'node' || childIdSet.has(n.id) || stacks.has(n.id)) continue
         // count ports per side exactly as ordering will assign them
         // (a port with an out edge goes south, everything else north) —
         // counting edges undercounted hubs whose reversed edges flipped
@@ -488,6 +498,7 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
       level.routes.set(id, dedupe(route))
       level.labels.set(id, placed.get(id) ?? [])
     }
+    if (stacks.size > 0) expandStacks(stacks, level.nodes, level.routes, level.labels)
     return level
   }
 
@@ -522,7 +533,22 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
 export function layoutFast(input: LayoutInput, fit: FitOptions = {}, trace?: Trace): LayoutResult {
   const sideways = input.dir === 'right' || input.dir === 'left'
   const base: LayoutOptions = { cycles: { strategy: 'greedy' }, placement: { strategy: 'bk' } }
-  if (fit.width === undefined || sideways) return layout(input, base, trace)
+  if (fit.width === undefined) return layout(input, base, trace)
+  if (sideways) {
+    // the flow axis cannot be staggered narrower — stacking chains
+    // is the one lever, best-effort
+    let chosen = base
+    let res = layout(input, base)
+    if (res.width > fit.width) {
+      const st = layout(input, { ...base, stackChains: true })
+      if (st.width < res.width) {
+        chosen = { ...base, stackChains: true }
+        res = st
+      }
+    }
+    if (trace !== undefined) res = layout(input, chosen, trace)
+    return res
+  }
   const capped = (cap: number): LayoutOptions => ({ ...base, layering: { maxWidth: cap } })
   const first = layout(input, capped(fit.width))
   if (first.width <= fit.width)
@@ -594,7 +620,7 @@ export function layoutBest(
       ? Math.min(2, Math.max(0, budget - cells.length))
       : 0
 
-  const run = (cy: Cy, pl: Pl, cap: number | undefined): Candidate | null => {
+  const run = (cy: Cy, pl: Pl, cap: number | undefined, stack = false): Candidate | null => {
     if (candidates.length >= budget - finalists) return null
     const o: LayoutOptions = {
       ...opts,
@@ -604,17 +630,14 @@ export function layoutBest(
         ...opts.layering,
         ...(cap === undefined ? {} : { maxWidth: cap }),
       },
+      ...(stack ? { stackChains: true } : {}),
       ...(target === undefined || opts.squeeze !== undefined
         ? {}
         : { squeeze: target, squeezeBudget: 2 }),
     }
     const res = layout(input, o)
-    const c: Candidate = {
-      label: `${cy}+${pl}${cap !== undefined ? `+cap${cap}` : ''}`,
-      opts: o,
-      width: res.width,
-      height: res.height,
-    }
+    const label = `${cy}+${pl}${cap !== undefined ? `+cap${cap}` : ''}${stack ? '+stack' : ''}`
+    const c: Candidate = { label, opts: o, width: res.width, height: res.height }
     if (target !== undefined) c.fits = res.width <= target
     candidates.push(c)
     results.push(res)
@@ -627,22 +650,46 @@ export function layoutBest(
     }
     return a.width !== b.width ? a.width < b.width : a.height < b.height
   }
+  /** Opportunistic stacks must be a free lunch: without a target, a
+   * sideways stack may not be taller than the best whole layout (for
+   * down flow the width-first metric already guards — a stack that
+   * grows the width loses on its own; with a target the fits gate is
+   * the budget). A caller who pinned `stackChains` opted out. */
   const best = (): number => {
-    let k = 0
-    for (let i = 1; i < candidates.length; i++) if (better(candidates[i], candidates[k])) k = i
-    return k
+    let hCap = Number.POSITIVE_INFINITY
+    if (sideways && target === undefined && opts.stackChains === undefined) {
+      let u = -1
+      for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i].opts.stackChains === true) continue
+        if (u < 0 || better(candidates[i], candidates[u])) u = i
+      }
+      if (u >= 0) hCap = candidates[u].height
+    }
+    let k = -1
+    for (let i = 0; i < candidates.length; i++) {
+      if (candidates[i].opts.stackChains === true && candidates[i].height > hCap) continue
+      if (k < 0 || better(candidates[i], candidates[k])) k = i
+    }
+    return Math.max(0, k)
   }
+  const comboOf = (c: Candidate): [Cy, Pl] => [
+    c.opts.cycles?.strategy as Cy,
+    c.opts.placement?.strategy as Pl,
+  ]
+  const capOf = (c: Candidate): number | undefined => c.opts.layering?.maxWidth
   for (const [cy, pl] of cells) run(cy, pl, opts.layering?.maxWidth)
+  // hybrid flow probes: a width-capped sideways layout can trade its
+  // unconstrained cross extent for flow width by stacking chains — run
+  // the same cells folded and let the metric arbitrate
+  if (sideways && target !== undefined && opts.stackChains === undefined) {
+    for (const [cy, pl] of cells) run(cy, pl, opts.layering?.maxWidth, true)
+  }
   if (
     target !== undefined &&
     !sideways &&
     opts.layering?.maxWidth === undefined &&
     !candidates.some((c) => c.fits === true)
   ) {
-    const comboOf = (c: Candidate): [Cy, Pl] => [
-      c.opts.cycles?.strategy as Cy,
-      c.opts.placement?.strategy as Pl,
-    ]
     // only the two most promising uncapped probes advance to the capped
     // phase — the spared budget lets the cap ladder dig deeper, which
     // wins more fits than a broad shallow sweep does
@@ -651,7 +698,6 @@ export function layoutBest(
       const [cy, pl] = comboOf(c)
       run(cy, pl, target)
     }
-    const capOf = (c: Candidate): number | undefined => c.opts.layering?.maxWidth
     const tried = (cy: string, pl: string, cap: number): boolean =>
       candidates.some((c) => {
         const [a, b] = comboOf(c)
@@ -701,6 +747,23 @@ export function layoutBest(
       }
     }
   }
+  // opportunistic hybrid: stack the two most promising candidates and
+  // adopt only when it costs nothing the metric cares about (the free
+  // lunch: a chain folds into a band whose cross extent other content
+  // already pays for). Skipped when nothing fits a target — stacking
+  // grows the capped axis for down flow, so it cannot help there.
+  if (
+    !(sideways && target !== undefined) &&
+    opts.stackChains === undefined &&
+    (target === undefined || candidates.some((c) => c.fits === true))
+  ) {
+    const ranked = [...candidates].sort((a, b) => (better(a, b) ? -1 : 1))
+    for (const c of ranked.slice(0, 2)) {
+      if (c.opts.stackChains === true) continue
+      const [cy, pl] = comboOf(c)
+      run(cy, pl, capOf(c), true)
+    }
+  }
   if (finalists > 0) {
     const ranked = [...candidates].sort((a, b) => (better(a, b) ? -1 : 1))
     const anyFits = candidates.some((c) => c.fits === true)
@@ -728,16 +791,10 @@ export function layoutBest(
   }
   const k = best()
   const result = trace === undefined ? results[k] : layout(input, candidates[k].opts, trace)
-  if (target !== undefined && sideways) {
-    // the path floor is input-direction and cycle breaking can shorten
-    // it — when the estimate exceeds what was actually achieved it is
-    // invalid, and the achieved width is the honest number
-    const floor = flowFloor(input)
+  if (target !== undefined && sideways && result.width > target) {
     result.warnings = [
       ...result.warnings,
-      floor <= result.width
-        ? `fit.width not enforced for sideways flow: the longest dependency path alone needs ≈${floor} columns (page wrap not built yet)`
-        : `fit.width not enforced for sideways flow: narrowest layout found is ${result.width} columns (page wrap not built yet)`,
+      `fit.width ${target} not reached for sideways flow: the narrowest layout is ${result.width} columns`,
     ]
   }
   return { result, chosen: candidates[k].opts, candidates }
@@ -791,55 +848,6 @@ function measure(g: LGraph): [number, number] {
  * layering-time estimates cannot see. Returns a full layer assignment
  * for the base (pre-split) graph, or null when nothing moves.
  */
-/**
- * The structural floor of a sideways layout's width: the heaviest
- * dependency path, each node contributing its flow-axis size and each
- * hop a channel row; a compound contributes its own members' floor
- * plus the border. Cycle edges are skipped (they reverse anyway). An
- * estimate for the warning, not a bound the search uses.
- */
-function flowFloor(input: LayoutInput): number {
-  const compounds = input.compounds ?? []
-  const parentOf = new Map<string, string | undefined>()
-  for (const x of [...input.nodes, ...compounds]) parentOf.set(x.id, x.parent)
-  /** the ancestor of `id` (or itself) whose parent is `scope` */
-  const itemIn = (id: string, scope: string | undefined): string | undefined => {
-    let cur: string | undefined = id
-    while (cur !== undefined && parentOf.get(cur) !== scope) cur = parentOf.get(cur)
-    return cur
-  }
-  const scopeFloor = (scope: string | undefined): number => {
-    const size = new Map<string, number>()
-    for (const n of input.nodes) if (n.parent === scope) size.set(n.id, n.w)
-    for (const c of compounds) if (c.parent === scope) size.set(c.id, scopeFloor(c.id) + 2)
-    const outs = new Map<string, string[]>()
-    for (const e of input.edges) {
-      const a = itemIn(e.from, scope)
-      const b = itemIn(e.to, scope)
-      if (a === undefined || b === undefined || a === b) continue
-      outs.set(a, [...(outs.get(a) ?? []), b])
-    }
-    const memo = new Map<string, number>()
-    const onPath = new Set<string>()
-    const depth = (id: string): number => {
-      const m = memo.get(id)
-      if (m !== undefined) return m
-      if (onPath.has(id)) return 0
-      onPath.add(id)
-      let best = 0
-      for (const nx of outs.get(id) ?? []) best = Math.max(best, 1 + depth(nx))
-      onPath.delete(id)
-      const d = (size.get(id) ?? 0) + best
-      memo.set(id, d)
-      return d
-    }
-    let best = 0
-    for (const id of size.keys()) best = Math.max(best, depth(id))
-    return best
-  }
-  return scopeFloor(undefined)
-}
-
 function squeezeMoves(
   base: LGraph,
   routed: LGraph,
