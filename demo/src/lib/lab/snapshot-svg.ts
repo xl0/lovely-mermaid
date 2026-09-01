@@ -369,7 +369,9 @@ export function snapshotSvg(snap: Snapshot, view: View = DEFAULT_VIEW): Rendered
 			`<text x="${X(sideX + sideW / 2)}" y="${Y(0) - 6}" text-anchor="middle" fill="${C.dim}" font-size="10">unlayered</text>`
 		);
 	}
-	for (const f of frames) {
+	// hulls were computed deepest-first; paint shallowest-first so a nested
+	// frame sits above its parent and receives the pointer events inside it
+	for (const f of [...frames].reverse()) {
 		const title = esc(f.n.label ?? f.n.id);
 		const tw = title.length * fs * 0.62 + 8;
 		// an untitled frame (a state `--` region) keeps its border unbroken

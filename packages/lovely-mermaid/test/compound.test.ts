@@ -80,12 +80,48 @@ describe('compound graphs (recursive)', () => {
     const G = res.compounds.G
     expect(onBorder(G, res.edges.e0.route.at(-1) as Pt)).toBe(true)
     expect(onBorder(G, res.edges.e1.route[0])).toBe(true)
-    // A→G maps to the frame at the top level: a loop wrapping the frame
+    // A→G maps to the frame at the top level: out of A, through the
+    // bottom border, a loop wrapping the frame, in through the top
     const aa = res.edges.e2.route
-    expect(aa.length).toBe(6)
-    expect(aa[0][1]).toBe(G.y + G.h - 1)
-    expect(aa[2][0]).toBe(G.x + G.w + 1)
-    expect(aa[5][1]).toBe(G.y)
+    expect(wellFormed(aa, res.nodes.A, G)).toBe(true)
+    expect(aa.some(([, y]) => y === G.y + G.h - 1)).toBe(true) // S border
+    expect(Math.max(...aa.map(([x]) => x))).toBeGreaterThan(G.x + G.w - 1) // east wrap
+    expect(aa.at(-1)?.[1]).toBe(G.y) // ends on the top border
+    expect(res.warnings).toEqual([])
+  })
+
+  test('a frame→member edge wraps the frame and enters to the member', () => {
+    const res = lay(['A>B', 'G>B'], { G: ['A', 'B'] })
+    const G = res.compounds.G
+    const gb = res.edges.e1.route
+    expect(wellFormed(gb, G, res.nodes.B)).toBe(true)
+    expect(Math.max(...gb.map(([x]) => x))).toBeGreaterThan(G.x + G.w - 1) // east wrap
+    expect(gb.some((p) => onBorder(G, p))).toBe(true)
+    expect(res.warnings).toEqual([])
+    // no route runs through a box interior
+    for (const e of Object.values(res.edges)) {
+      for (let i = 1; i < e.route.length; i++) {
+        const [ax, ay] = e.route[i - 1]
+        const [bx, by] = e.route[i]
+        for (const [id, r] of Object.entries(res.nodes)) {
+          if (id === 'B') continue // endpoints touch their own boxes
+          for (let x = Math.min(ax, bx); x <= Math.max(ax, bx); x++)
+            for (let y = Math.min(ay, by); y <= Math.max(ay, by); y++) {
+              const interior = x > r.x && x < r.x + r.w - 1 && y > r.y && y < r.y + r.h - 1
+              expect(interior).toBe(false)
+            }
+        }
+      }
+    }
+  })
+
+  test('a compound↔descendant edge across two levels stays sound', () => {
+    const res = lay(['C>D', 'G>C'], { G: ['H'], H: ['C', 'D'] })
+    const { G, H } = res.compounds
+    expect(inside(G, H)).toBe(true)
+    const gc = res.edges.e1.route
+    expect(wellFormed(gc, G, res.nodes.C)).toBe(true)
+    expect(res.warnings).toEqual([])
   })
 
   test('a cycle between two frames is broken outside; the reversed edge still runs source→target', () => {

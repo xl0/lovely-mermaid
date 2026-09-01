@@ -84,6 +84,7 @@ export function orderNodes(g0: LGraph, opts: OrderingOptions, trace?: OrderTrace
     })
     if (opts.greedySwitch ?? true) {
       greedySwitch(best)
+      shoveDummiesOut(best)
       sortAllPorts(best)
     }
   }
@@ -229,6 +230,43 @@ function greedySwitch(s: State): void {
         const before = local(i)
         ;[row[k], row[k + 1]] = [row[k + 1], row[k]]
         if (local(i) < before) improved = true
+        else [row[k], row[k + 1]] = [row[k + 1], row[k]]
+      }
+    }
+  }
+}
+
+/**
+ * Crossing-neutral width polish: a long-edge dummy ordered between real
+ * nodes forces a corridor through the row (the `[frame, chains, frame]`
+ * mid-row holes) and pinches its own routing slack. Where an adjacent
+ * swap with a real node changes no crossings, the dummy moves toward its
+ * nearer row edge. Crossings never increase, and every accepted swap
+ * strictly reduces the dummies' summed distance to their nearer edge,
+ * so it terminates.
+ */
+function shoveDummiesOut(s: State): void {
+  const L = s.layers.length
+  const local = (i: number): number =>
+    (i > 0 ? countPair(s, i - 1) : 0) + (i + 1 < L ? countPair(s, i) : 0)
+  let improved = true
+  while (improved) {
+    improved = false
+    for (let i = 0; i < L; i++) {
+      const row = s.layers[i]
+      if (pinnedRow(row)) continue
+      const half = (row.length - 1) / 2
+      for (let k = 0; k + 1 < row.length; k++) {
+        const a = row[k]
+        const b = row[k + 1]
+        const dummyRight = b.kind === 'dummy' && a.kind !== 'dummy'
+        const dummyLeft = a.kind === 'dummy' && b.kind !== 'dummy'
+        if (!dummyLeft && !dummyRight) continue
+        // only swaps that bring the dummy toward its nearer edge
+        if (dummyRight ? k + 1 > half : k < half) continue
+        const before = local(i)
+        ;[row[k], row[k + 1]] = [row[k + 1], row[k]]
+        if (local(i) <= before) improved = true
         else [row[k], row[k + 1]] = [row[k + 1], row[k]]
       }
     }

@@ -25,7 +25,7 @@ import { buildGraph, toSnapshot } from './graph.ts'
 import { applyLayers, assignLayers, splitLongEdges } from './layering.ts'
 import { orderNodes } from './ordering.ts'
 import { placeNodes } from './placement.ts'
-import { joinRoutes, placeLabels, routeEdges } from './routing.ts'
+import { dedupe, joinRoutes, placeLabels, routeEdges } from './routing.ts'
 import type { SEdge, SNode, Snapshot } from './snapshot.ts'
 import type {
   Candidate,
@@ -242,13 +242,17 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
       const childIdSet = new Set(children.map((c) => c.id))
       for (const n of g.nodes) {
         if (n.kind !== 'node' || childIdSet.has(n.id)) continue
-        let ins = 0
-        let outs = 0
+        // count ports per side exactly as ordering will assign them
+        // (a port with an out edge goes south, everything else north) —
+        // counting edges undercounted hubs whose reversed edges flipped
+        // their ports' sides, and the crowded side lost its | | pitch
+        let south = 0
+        let north = 0
         for (const q of n.ports) {
-          ins += q.in.length
-          outs += q.out.length
+          if (q.out.length > 0) south++
+          else north++
         }
-        const k = Math.max(ins, outs)
+        const k = Math.max(south, north)
         if (k > 0) n.w = Math.max(n.w, (k - 1) * (1 + sp.edgeEdge) + 3)
       }
       // children: their ports follow from this level's edge directions
@@ -261,7 +265,10 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
         childSpecs.set(c.id, specs)
         childFixed.set(c.id, fixed)
         for (const p of node.ports) {
-          for (const e of [...p.in, ...p.out]) {
+          for (const [e, incoming] of [
+            ...p.in.map((e): [typeof e, boolean] => [e, true]),
+            ...p.out.map((e): [typeof e, boolean] => [e, false]),
+          ]) {
             const spec = ports.find((q) => q.edge === e.id)
             let inner: string
             let fromInside: boolean
@@ -277,8 +284,17 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
               fromInside = fromIn
             }
             if (inner === c.id) continue // ends at the frame itself: a free port
+            // A compound↔descendant edge collapses to a self-loop on this
+            // child, so the same edge shows up on both its ports. One spec:
+            // the side follows the original direction (a member→frame edge
+            // exits south into the wrap, a frame→member edge enters north
+            // out of it), and only the wrap port on that side pins to the
+            // inner column — the other stays free.
+            const collapsed = e.src.node === node && e.dst.node === node
+            const side = collapsed ? (fromInside ? 'S' : 'N') : e.dst.node === node ? 'N' : 'S'
+            if (collapsed && (side === 'N') !== incoming) continue
             const id = `${c.id}:${e.id}`
-            specs.push({ id, side: e.dst.node === node ? 'N' : 'S', edge: e.id, inner, fromInside })
+            specs.push({ id, side, edge: e.id, inner, fromInside })
             fixed.push([p, id])
           }
         }
@@ -385,7 +401,12 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
           h = placeLabels(h, opts.labels ?? {})
           const [w0, h0] = measure(g)
           const [w1, h1] = measure(h)
-          if (w1 > Math.max(opts.squeeze, w0) || h1 >= h0) {
+          // homing moves shorten wiring at unchanged height — equal
+          // height is a pass for them, a reject for everything else
+          const ok =
+            w1 <= Math.max(opts.squeeze, w0) &&
+            (h1 < h0 || (h1 === h0 && mv.key.startsWith('home:')))
+          if (!ok) {
             tried.add(mv.key)
             continue
           }
@@ -454,11 +475,16 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
     const inEdgeById = new Map(inEdges.map((e) => [e.id, e]))
     for (const [id, pts] of own) {
       const ie = inEdgeById.get(id) as InputEdge
-      const route = [
-        ...(pieces.get(ie.from)?.get(id) ?? []),
-        ...pts,
-        ...(pieces.get(ie.to)?.get(id) ?? []),
-      ]
+      // `ie` is itemAt-mapped, so an end naming a child covers both "inside
+      // it" and "the frame itself" — the original edge tells them apart. An
+      // end that IS the frame contributes no inner piece (and for a
+      // compound↔descendant edge both mapped ends name the same child, so
+      // keying on `ie` alone would attach the one piece to both sides).
+      const oe = edgeById.get(id)
+      const fromPiece =
+        oe === undefined || oe.from !== ie.from ? pieces.get(ie.from)?.get(id) : undefined
+      const toPiece = oe === undefined || oe.to !== ie.to ? pieces.get(ie.to)?.get(id) : undefined
+      const route = [...(fromPiece ?? []), ...pts, ...(toPiece ?? [])]
       level.routes.set(id, dedupe(route))
       level.labels.set(id, placed.get(id) ?? [])
     }
@@ -495,12 +521,19 @@ export function layout(input: LayoutInput, opts: LayoutOptions = {}, trace?: Tra
  */
 export function layoutFast(input: LayoutInput, fit: FitOptions = {}, trace?: Trace): LayoutResult {
   const sideways = input.dir === 'right' || input.dir === 'left'
-  const opts: LayoutOptions = {
-    cycles: { strategy: 'greedy' },
-    placement: { strategy: 'bk' },
-    ...(fit.width !== undefined && !sideways ? { layering: { maxWidth: fit.width } } : {}),
-  }
-  return layout(input, opts, trace)
+  const base: LayoutOptions = { cycles: { strategy: 'greedy' }, placement: { strategy: 'bk' } }
+  if (fit.width === undefined || sideways) return layout(input, base, trace)
+  const capped = (cap: number): LayoutOptions => ({ ...base, layering: { maxWidth: cap } })
+  const first = layout(input, capped(fit.width))
+  if (first.width <= fit.width)
+    return trace === undefined ? first : layout(input, capped(fit.width), trace)
+  // the cap is an estimate and compound-heavy graphs overshoot it badly;
+  // one calibration pass by the observed overshoot, floored at 0.7× the
+  // target (the naive formula over-tightens and buys height for nothing)
+  const cap = Math.max(Math.round(fit.width * 0.7), fit.width - (first.width - fit.width))
+  const second = layout(input, capped(cap), trace)
+  if (second.width < first.width) return second
+  return trace === undefined ? first : layout(input, capped(fit.width), trace)
 }
 
 /**
@@ -560,7 +593,8 @@ export function layoutBest(
     target !== undefined && !sideways && opts.squeeze === undefined
       ? Math.min(2, Math.max(0, budget - cells.length))
       : 0
-  const run = (cy: Cy, pl: Pl, cap: number | undefined, packW?: number): Candidate | null => {
+
+  const run = (cy: Cy, pl: Pl, cap: number | undefined): Candidate | null => {
     if (candidates.length >= budget - finalists) return null
     const o: LayoutOptions = {
       ...opts,
@@ -569,7 +603,6 @@ export function layoutBest(
       layering: {
         ...opts.layering,
         ...(cap === undefined ? {} : { maxWidth: cap }),
-        ...(packW === undefined ? {} : { packWidth: packW }),
       },
       ...(target === undefined || opts.squeeze !== undefined
         ? {}
@@ -577,7 +610,7 @@ export function layoutBest(
     }
     const res = layout(input, o)
     const c: Candidate = {
-      label: `${cy}+${pl}${cap !== undefined ? `+cap${cap}` : ''}${packW !== undefined ? `+pack${packW}` : ''}`,
+      label: `${cy}+${pl}${cap !== undefined ? `+cap${cap}` : ''}`,
       opts: o,
       width: res.width,
       height: res.height,
@@ -606,7 +639,10 @@ export function layoutBest(
     opts.layering?.maxWidth === undefined &&
     !candidates.some((c) => c.fits === true)
   ) {
-    const comboOf = (c: Candidate): [Cy, Pl] => c.label.split('+cap')[0].split('+') as [Cy, Pl]
+    const comboOf = (c: Candidate): [Cy, Pl] => [
+      c.opts.cycles?.strategy as Cy,
+      c.opts.placement?.strategy as Pl,
+    ]
     // only the two most promising uncapped probes advance to the capped
     // phase — the spared budget lets the cap ladder dig deeper, which
     // wins more fits than a broad shallow sweep does
@@ -617,7 +653,10 @@ export function layoutBest(
     }
     const capOf = (c: Candidate): number | undefined => c.opts.layering?.maxWidth
     const tried = (cy: string, pl: string, cap: number): boolean =>
-      candidates.some((c) => c.label === `${cy}+${pl}+cap${cap}`)
+      candidates.some((c) => {
+        const [a, b] = comboOf(c)
+        return a === cy && b === pl && capOf(c) === cap
+      })
     // tighten until something fits: by the observed overshoot, but never
     // slower than a geometric descent — the cap↔width curve is
     // non-monotonic, and the first stall often hides a deeper minimum
@@ -689,6 +728,12 @@ export function layoutBest(
   }
   const k = best()
   const result = trace === undefined ? results[k] : layout(input, candidates[k].opts, trace)
+  if (target !== undefined && sideways) {
+    result.warnings = [
+      ...result.warnings,
+      'fit.width not enforced: a sideways flow runs along the width axis, and the engine has no flow-axis capping yet',
+    ]
+  }
   return { result, chosen: candidates[k].opts, candidates }
 }
 
@@ -873,6 +918,48 @@ function squeezeMoves(
       moved = `tall:${best.v.id}:${best.to}`
     }
   }
+  // Still nothing: homing. Dispersal parks nodes wherever a band has
+  // room, with no edge-length term — a node can end up stranded a dozen
+  // bands from every partner, its edges jailed through all of them. A
+  // node shorter than its band's tallest moves toward the median of its
+  // partners' layers at no height cost; the driver accepts these at
+  // equal height because they strictly shorten the wiring.
+  if (moved === null) {
+    let best: { v: LNode; to: number; gain: number } | null = null
+    for (const l of keys) {
+      const row = rows.get(l) as LNode[]
+      if (!movable(row)) continue
+      for (const v of row) {
+        if (row.length > 1 && v.h >= Math.max(...row.filter((n) => n !== v).map((n) => n.h)))
+          continue
+        const partners: number[] = []
+        for (const q of v.ports)
+          for (const e of [...q.in, ...q.out]) {
+            const other = e.src.node === v ? e.dst.node : e.src.node
+            if (other !== v) partners.push(layerOf.get(other.id) as number)
+          }
+        if (partners.length === 0) continue
+        partners.sort((a, b) => a - b)
+        const opt = partners[(partners.length - 1) >> 1]
+        if (Math.abs(l - opt) < 3) continue
+        for (const t of [...keys].sort((a, b) => Math.abs(a - opt) - Math.abs(b - opt))) {
+          const trow = rows.get(t) as LNode[]
+          if (t === l || trow.length === 0 || !movable(trow) || !feasible(v.id, t)) continue
+          if (skip.has(`home:${v.id}:${t}`)) continue
+          const vw = v.w + 2 * (v.loops ?? 0) + sp.nodeNode
+          if ((demand.get(t) ?? 0) + vw > target) continue
+          if (v.h > Math.max(...trow.map((n) => n.h))) continue // would grow the target band
+          const gain = Math.abs(l - opt) - Math.abs(t - opt)
+          if (gain > 0 && (best === null || gain > best.gain)) best = { v, to: t, gain }
+          break
+        }
+      }
+    }
+    if (best !== null) {
+      layerOf.set(best.v.id, best.to)
+      moved = `home:${best.v.id}:${best.to}`
+    }
+  }
   if (moved === null) return null
   // drop layer values nothing uses, where every spanning base edge has slack
   const values = [...new Set(layerOf.values())].sort((a, b) => a - b)
@@ -892,15 +979,6 @@ function squeezeMoves(
     for (const [id, lv] of layerOf) if (lv > v) layerOf.set(id, lv - 1)
   }
   return { key: moved, forced: layerOf }
-}
-
-function dedupe(pts: Pt[]): Pt[] {
-  const out: Pt[] = []
-  for (const p of pts) {
-    const last = out[out.length - 1]
-    if (last === undefined || last[0] !== p[0] || last[1] !== p[1]) out.push(p)
-  }
-  return out
 }
 
 /** The whole hierarchy in one picture for the lab, in the requested

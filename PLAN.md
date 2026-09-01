@@ -218,15 +218,95 @@ visualization comes first and every phase must be viewable.
       non-regressing measurements, remember rejected rows. session-er
       @100: 89×242 → 93×161. Hard-target policy confirmed by the user
       (terminal width is a wall).
-- [ ] Routing dither (open, 2026-09-01): parallel-chain bundles jog in
-      sync (image-46 kinks) — the per-row windows genuinely exclude a
-      common column because packed neighbours shift; individual-chain
-      smoothing can't fire (bundle at pitch), continuity targeting
-      widened +6 for no gain (both tried, reverted). Root cause is
-      ordering: chains' relative order dithers between rows. Fix
-      belongs in the parked width-aware ordering work. Also PA→● style
-      jogs: port at corner clamp, target outside the box; needs the
-      node to slide right past a trunk dummy (order pinch).
+- [x] Port tuning, last word (2026-09-01): tuned ports were being
+      un-aligned by the second relax and compactRight running after
+      them — ports move no geometry, so tunePorts now runs twice more
+      after compaction. arch-state@100 h-runs 225→155, 99×718→99×670;
+      arch-system@120 →119×314; session-er@100 →96×149; uncapped
+      arch-classes →314×67. The screenshot chain renders wire-straight.
+- [x] Chain folding: built, measured, REMOVED entirely (2026-09-01).
+      The mechanism (reverse the second half's edges; layering makes
+      the boustrophedon naturally) worked — 13-chain height ×0.5 for
+      width ×1.5 — but loop candidates never won under hard-width +
+      squeeze band packing, and the manual renders looked worse in
+      practice (user). If it ever returns, the edge-flip approach is
+      the way. tunePorts now moves a port
+      only onto an exact partner column (straightens a wire); near-miss
+      moves kept the bend and parked it at the border — reverted to
+      centred defaults per review of the visuals (+a few rows height,
+      user's call: aesthetics over rows). Review finding #4 disposition:
+      jog-only channels are 14/317 (system@120) and 21/704 (state@100)
+      rows — parked with the ordering dither; folding was the big lever
+      and is now available manually.
+- [x] Review round (2026-09-01, REVIEW-ENGINE.md): HIGH compound↔
+      descendant edge fixed (collapsed self-loop: one spec with
+      direction-correct side, matching-port pin, assembly consults the
+      original edge for piece sides) + goldens for all three shapes.
+      Sideways+target now warns. layoutFast calibration pass (overshoot
+      re-cap floored at 0.7×target: arch-state fast@100 191→109).
+      Structured comboOf/capOf from opts (label protocol gone), dead
+      packW removed, dedupe unified. NEW: seeded geometric lint sweep
+      (60 tests) — immediately caught adjacent-band self-loop wraps
+      sharing the one trackless-channel row (now two rows when both
+      bands loop). Not attempted: disperseRow/feasible unification
+      (packLayers↔squeezeMoves), port-spec derivation extraction —
+      the copies stand until a cleaner cut shows itself.
+- [x] Width-aware ordering, step 1 (2026-09-01): shoveDummiesOut —
+      crossing-neutral adjacent swaps move a dummy past a real node
+      toward its nearer row edge (kills [frame, chains, frame]
+      corridors; strictly terminating potential). arch-system@134
+      121→119, rest held; never-worse by construction. Step 2 if
+      wanted: same idea within dummy bundles (longest span outermost)
+      to stabilize the routing windows behind the dither.
+- [x] Stranded nodes + channel overlap (2026-09-01). (a) A node whose
+      ports are all south now sinks to its band's floor (CompactionOutcome
+      hung 93 rows above Idle at the top of a tall frame's band; now 11).
+      Homing squeeze moves added for cross-band strandings (accepted at
+      equal height — they strictly shorten wiring). (b) The channel
+      router's greedy arc-set could silently break MANDATORY stub deps
+      (an in-stub ran through another edge's out-stub column — the
+      review's 'theoretical' case, live at arch-state@100): violated
+      mandatory pairs now split a trunk through a free column and
+      re-order; same-edge trunk pairs are exempt from the criticality
+      rules (forced governs); forced entries are rewritten on split.
+      Overlap lint: 0 same-column runs at 100/120/140/160.
+- [x] Hub port pile-up (2026-09-01): tunePorts' fitting clamped every
+      tail port of a crowded side onto `hi` — five edges shared one
+      Idle cell and the router merged them into one drawn column (the
+      overlap screenshot). Fixed: a side without room for full pitch
+      keeps portCell's spread, and each tuned position is capped so the
+      rest still fit. Widening now counts side populations (a reversed
+      edge flips its port's side; edge-count undercounted hubs). Hub
+      regression test through layout(). | | pitch confirmed: root
+      edgeEdge=1 → pitch 2, Idle takes 11 distinct arrows.
+- [x] The zigzag's true parent: compactRight shredding (2026-09-01).
+      Instrumenting relaxChains proved chains come out DEAD STRAIGHT —
+      compactRight then pushed row members left per-row with no notion
+      of chains, re-zigzagging trunks in exactly the wide-box rows. Fix:
+      relaxChains runs again after compaction (width-safe: bounded by
+      current extent). Every metric jumped: session-er@100 96×137,
+      arch-system@120 118×300 (jogs 7%), uncapped 199×243, arch-state
+      @100 100×589 (was 621), @160 140×449. Longest-first chain
+      processing kept (harmless, principled). Lab: nested frames now
+      painted shallowest-first so the child receives pointer events.
+- [x] Box stagger was the dither's parent (2026-09-01): NS placement
+      weights 32/8/4 let trunks outweigh box chains 8:1 — node columns
+      staggered under fans, each box row sliced the bundle corridor at
+      a different x, and the bundles zigzagged in the shadow. Stiffened
+      to 32/16/8 (ns) and 4/3/2 (ns2): arch-state@100 short jogs
+      25%→8%, 99×693→100×621, box chains render as straight columns
+      (region verified). pick pack-left fallback tried, no effect,
+      reverted.
+- [x] Routing dither CLOSED (2026-09-01): continuity targeting in
+      relaxChains (middle chain groups hold the previous group's
+      column; only the last group aims at the destination) — retried
+      after exact-only tuning + ports-last-word changed the landscape,
+      and this time the synchronized bundle zigzag is gone (tool-loop
+      region verified visually; first attempt had failed against the
+      old pass order). Cost ±few rows / +6 width in one config;
+      aesthetics-first per user. Leftover micro-jogs are genuine fan
+      approaches and order pinches (PA→● class) — width-aware ordering
+      territory if ever needed.
 - [x] Port tuning (2026-09-01): tunePorts slides free N/S ports to
       their partners' median columns (order/pitch kept, corners and
       fixed/self-loop ports excluded), second relax pass after. Border

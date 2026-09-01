@@ -99,7 +99,10 @@ packages/lovely-mermaid/  the npm package (workspace member; demo/ will be a sib
 ## Layout engine
 
 `src/engine/` is a generic layered engine: synchronous, dependency-free,
-integer geometry in whatever unit the caller's sizes use. `layout(input,
+integer geometry in whatever unit the caller's sizes use. Sized for
+mermaid inputs (`MAX_NODES` 256): `cycles.ts` dfs and `simplex.ts`
+`number()` recurse and would blow the stack near ~10k nodes — convert
+before shipping the engine standalone. `layout(input,
 opts?, trace?)` runs the phases in order, each a pure function `graph →
 graph` that clones its input (`cloneGraph`, hand-rolled — ~4× faster
 than `structuredClone`, which was the engine's single biggest cost — the
@@ -191,7 +194,12 @@ the fixed side's facing ports re-sort by where they land; sweeps alternate
 while the exact Fenwick-tree crossing count improves (a losing sweep is
 undone); `thoroughness` picks among four deterministic variants (first
 direction × reversed input), declaration order always variant one; a
-two-sided greedy switch polishes; then every port gets a border cell
+two-sided greedy switch polishes, then `shoveDummiesOut` spends the
+crossing-neutral freedom on width: a dummy ordered between real nodes
+moves toward its nearer row edge where no crossing changes, so long
+chains stop cutting corridors through rows (never worse — crossings
+equal, a strictly shrinking edge-distance potential); then every port
+gets a border cell
 (`portCell`: spread over `1..w-2`, centre for one, cells shared when a
 side is over capacity — the router treats a shared cell as one trunk).
 Sub-steps are traced (`order · sweep 1.2 ↑ · 3 crossings`). **place** —
@@ -222,18 +230,25 @@ candidate is traced (`place · upper medians, packed left · width 42`).
 which gap an edge crosses per layer, not the exact column, so every chain
 slides within the slack its row neighbours leave (order and width are
 untouched) toward its end ports and takes the fewest columns its gap
-intervals allow (greedy stabbing, bend-minimal; passes repeat until no
-chain moves) — a staircase of one-column bends collapses to straight
+intervals allow (greedy stabbing; middle groups hold the previous
+group's column and only the final group aims at the destination —
+chasing the destination early made whole bundles zigzag after every
+pinch; passes repeat until no chain moves) — a staircase of one-column bends collapses to straight
 runs; port dummies join in as one-cell chains anchored on their single
 inner endpoint, so a frame's ports spread out over what they connect to
 instead of bunching at the border's left (their pinned order bounds the
-slide). Then the ports meet the wires halfway (`tunePorts`): every
-free N/S port slides to the median column of its partners — order
-kept, channel pitch between ports, corners excluded, fixed ports and
-self-loop ends untouched — and a second relaxation lets the chains
-finish the job; an edge whose far end lines up gets a straight drop
-instead of a double bend at the border. Straightness never pays for
-width: `compactRight` then pulls
+slide). Then the ports meet the wires halfway (`tunePorts`): a free
+N/S port moves ONLY onto the exact median column of its partners — a
+straightened wire — and otherwise keeps its centred default (a near
+miss keeps the bend count and parks the kink at the border, which
+reads worse); order kept, channel pitch between ports, corners
+excluded, fixed ports and self-loop ends untouched. Because every
+later pass moves boxes and chains and un-aligns tuned ports, ports
+get the last word: tunePorts runs again — twice, so mutually-tuning
+pairs settle — after compaction, when nothing moves any more. That
+final word straightened ~70 wires on arch-state@100 and dropped
+heights corpus-wide (straight drops need no channel tracks).
+Straightness never pays for width: `compactRight` then pulls
 the nodes that define the right edge back left within their row slack,
 one extent tier at a time — a frame stranded right of a fanned-out
 trunk bundle slides home, everything else keeps its straight column.
@@ -245,7 +260,10 @@ definer blocked by a neighbour that itself has room pulls the whole
 prefix left, each pushed only as far as needed (`at` rims hold their
 ground). That one change let several fit targets fit for the first
 time — placement's straightness spread was quietly costing 30-80
-columns on trunk-heavy diagrams. Then ELK's orthogonal channel router in cells (ch. 5): per
+columns on trunk-heavy diagrams. Compaction pushes row members
+per-row with no notion of chains, so `relaxChains` runs once more
+after it — the pass that finally killed the bundle staircases (the
+chains were straight before compaction all along). Then ELK's orthogonal channel router in cells (ch. 5): per
 channel, a *trunk* per source cell (a fan-out bus; edges into one cell
 merge in its column instead — fusing by target too would join unrelated
 sources), stub → trunk row → stub; trunks with overlapping extents get a
@@ -318,8 +336,11 @@ candidate-loop knob), `arch-state` 239×318 (old 378×432),
 cells.
 
 `layoutFast(input, fit?, trace?)` is the streaming mode: one
-deterministic greedy+bk pass staggered toward `fit.width` (best-effort —
-the cap is an estimate and may be exceeded), 1–20 ms on the corpus.
+deterministic greedy+bk pass staggered toward `fit.width`, plus one
+calibration pass when the estimate overshoots (cap re-tightened by the
+overshoot, floored at 0.7× the target — compound-heavy graphs overshoot
+badly and the naive formula over-tightens); best-effort, may still
+exceed. 1–76 ms on the corpus.
 The bridge exposes it as `traceEngineFast`; the examples page has a
 `fast` checkbox. Re-run it per streamed update, then run the loop once
 the source settles.

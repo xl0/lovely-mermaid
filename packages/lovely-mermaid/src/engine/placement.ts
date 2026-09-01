@@ -370,9 +370,14 @@ function networkSimplexPlace(g: LGraph, flat = false): Map<LNode, number> {
     const s = index.get(e.src.node) as number
     const t = index.get(e.dst.node) as number
     const d = count++
+    // box-adjacent edges hold their columns against trunk pulls: with
+    // the classic 8:2:1 ratios the trunks outweighed box chains 8:1 and
+    // node columns staggered under every fan — the pass-through bundles
+    // then zigzagged in their shadow. 2:1.5:1 / 4:2:1 keeps trunks
+    // straightest but lets a chain of boxes stay a straight column.
     const hi = flat ? 4 : 32
-    const mid = flat ? 2 : 8
-    const lo = flat ? 1 : 4
+    const mid = flat ? 3 : 16
+    const lo = flat ? 2 : 8
     const w =
       e.src.node.kind !== 'node' && e.dst.node.kind !== 'node'
         ? hi

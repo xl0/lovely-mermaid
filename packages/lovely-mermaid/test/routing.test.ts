@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { breakCycles } from '../src/engine/cycles.ts'
 import type { LGraph } from '../src/engine/graph.ts'
+import { layout } from '../src/engine/index.ts'
 import { assignLayers, splitLongEdges } from '../src/engine/layering.ts'
 import { orderNodes } from '../src/engine/ordering.ts'
 import { placeNodes } from '../src/engine/placement.ts'
 import { joinRoutes, routeEdges } from '../src/engine/routing.ts'
 import type { Pt } from '../src/engine/types.ts'
-import { graph, pure } from './engine-helpers.ts'
+import { graph, inputOf, pure, spacing } from './engine-helpers.ts'
 
 const placed = (items: string[], order: 'sweep' | 'none' = 'sweep'): LGraph =>
   placeNodes(
@@ -259,6 +260,31 @@ describe('routing', () => {
           expect(bands.some(([t, b]) => r[i][1] >= t && r[i][1] <= b)).toBe(false)
         }
       }
+    }
+  })
+  test('a crowded hub keeps one cell per edge end, at pitch', () => {
+    // 2-cycles reverse half the edges; the hub's busiest side must still
+    // give every edge its own border cell (a shared cell merges unrelated
+    // edges into one drawn column). Through layout() so the hub widens.
+    const edges = ['H>A', 'A>H', 'H>B', 'B>H', 'H>C', 'C>H', 'H>D', 'D>H', 'X>H', 'H>Y']
+    const res = layout(inputOf(edges))
+    const H = res.nodes.H
+    const ends = new Map<number, number>()
+    for (const e of inputOf(edges).edges) {
+      if (e.from !== 'H' && e.to !== 'H') continue
+      const r = res.edges[e.id].route
+      const pt = e.from === 'H' ? r[0] : r[r.length - 1]
+      if (pt[1] !== H.y && pt[1] !== H.y + H.h - 1) continue
+      const key = pt[1] * 10000 + pt[0]
+      ends.set(key, (ends.get(key) ?? 0) + 1)
+    }
+    for (const [, count] of ends) expect(count).toBe(1)
+    // ports keep the channel pitch on each border row
+    for (const row of [H.y, H.y + H.h - 1]) {
+      const xs = [...ends.keys()].filter((k) => Math.floor(k / 10000) === row).map((k) => k % 10000)
+      xs.sort((a, b) => a - b)
+      for (let i = 1; i < xs.length; i++)
+        expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(1 + spacing.edgeEdge)
     }
   })
 })

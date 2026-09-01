@@ -40,6 +40,16 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
   tunePorts(g)
   relaxChains(g)
   compactRight(g)
+  // compaction pushes row members left one row at a time with no notion
+  // of chains — it shreds straight trunks in exactly the rows a wide box
+  // needs room in. Relaxing again re-melts the chains into the compacted
+  // corridors (never widening: relax is bounded by the current extent).
+  relaxChains(g)
+  // the passes above keep moving boxes and chains, which un-aligns
+  // tuned ports; ports move nothing, so they get the last word — twice,
+  // so mutually-tuning pairs settle on one column
+  tunePorts(g)
+  tunePorts(g)
   const gapRows = Math.max(1, g.spacing.channelGap)
   const bandH = g.layers.map((row) => Math.max(1, ...row.map((n) => n.h)))
   const col = (p: LPort): number => p.node.x + p.pos
@@ -58,17 +68,33 @@ export function routeEdges(g0: LGraph, _opts: RoutingOptions): LGraph {
   const top: number[] = []
   // stacked self-loops: the first loop borrows the adjacent gap row as
   // before, every further one gets a real row of its own on both sides
-  const extraLoops = (l: number): number =>
-    Math.max(0, ...(g.layers[l] ?? []).map((n) => (n.loops ?? 0) - 1))
-  let y = Math.max(0, ...(g.layers[0] ?? []).map((n) => n.loops ?? 0))
+  const maxLoops = (l: number): number =>
+    Math.max(0, ...(g.layers[l] ?? []).map((n) => n.loops ?? 0))
+  const extraLoops = (l: number): number => Math.max(0, maxLoops(l) - 1)
+  let y = maxLoops(0)
   for (let l = 0; l < L; l++) {
     top.push(y)
-    for (const n of g.layers[l]) n.y = y
+    for (const n of g.layers[l]) {
+      // a node nothing enters from above sinks to its band's floor —
+      // a short choice node sharing a band with a tall frame otherwise
+      // hangs at the top with its wires jailed down the whole band
+      const sink =
+        n.kind === 'node' &&
+        (n.loops ?? 0) === 0 &&
+        n.ports.length > 0 &&
+        n.ports.every((p) => p.side === 'S')
+      n.y = sink ? y + bandH[l] - Math.max(1, n.h) : y
+    }
     y += bandH[l] + extraLoops(l)
     if (l + 1 < L) {
       const ch = channels[l]
       ch.first = y + gapRows
-      y += ch.tracks === 0 ? 1 : ch.tracks + 2 * gapRows
+      // a trackless channel is one shared row; when both bands wrap
+      // self-loops into it, their legs would coincide — give it two
+      y +=
+        ch.tracks === 0
+          ? 1 + (maxLoops(l) > 0 && maxLoops(l + 1) > 0 ? 1 : 0)
+          : ch.tracks + 2 * gapRows
       y += extraLoops(l + 1)
     }
   }
@@ -167,12 +193,27 @@ function tunePorts(g: LGraph): void {
         anchors.sort((x, y) => x - y)
         return anchors[(anchors.length - 1) >> 1]
       })
+      // a crowded side keeps portCell's even spread: without room for
+      // every port at full pitch, the fitting below would clamp the tail
+      // onto one shared cell and the router would merge unrelated edges
+      // into a single column
+      if (lo + (ps.length - 1) * pitch > hi) continue
+      // a move is worth it only when it lands exactly on the partner's
+      // column and straightens the wire — a near miss keeps the same
+      // bend count but parks the kink right at the border, which reads
+      // worse than the default centred port with its bend mid-channel;
+      // each position is capped so the ports after it still fit at pitch
       const xs: number[] = []
-      for (let i = 0; i < ps.length; i++)
-        xs.push(Math.max(i === 0 ? lo : xs[i - 1] + pitch, Math.min(hi, Math.max(lo, want[i]))))
-      for (let i = ps.length - 1; i >= 0; i--) {
-        const cap = i === ps.length - 1 ? hi : xs[i + 1] - pitch
-        if (xs[i] > cap) xs[i] = Math.max(lo, cap)
+      let prev = lo - pitch
+      for (let i = 0; i < ps.length; i++) {
+        const cap = hi - (ps.length - 1 - i) * pitch
+        const exact = want[i]
+        const x =
+          exact >= Math.max(lo, prev + pitch) && exact <= cap
+            ? exact
+            : Math.min(cap, Math.max(ps[i].pos, prev + pitch))
+        xs.push(x)
+        prev = x
       }
       ps.forEach((p, i) => {
         p.pos = xs[i]
@@ -255,8 +296,16 @@ function relaxChains(g: LGraph): void {
     if (list === undefined) chains.set(n.origin as string, [n])
     else list.push(n)
   }
-  const keys = [...chains.keys()].sort()
   for (const ds of chains.values()) ds.sort((a, b) => a.layer - b.layer)
+  // longest chains stab first: they claim straight corridor columns and
+  // everything shorter bends once against a settled wall — id-order
+  // processing let every chain's window depend on unsettled neighbours,
+  // and whole bundles staircased one step per channel
+  const keys = [...chains.keys()].sort((a, b) => {
+    const la = (chains.get(a) as LNode[]).length
+    const lb = (chains.get(b) as LNode[]).length
+    return lb - la || (a < b ? -1 : 1)
+  })
   /** `primary` if the window allows it, else `secondary`, else the near edge. */
   const pick = (lo: number, hi: number, primary: number, secondary: number): number => {
     if (primary >= lo && primary <= hi) return primary
@@ -309,12 +358,17 @@ function relaxChains(g: LGraph): void {
           hi = Math.min(hi, iv[end][1])
           end++
         }
-        const x = pick(lo, hi, target, end === ds.length ? dstCol : srcCol)
+        // a middle group holds the previous group's column and moves only
+        // where a pinch forces it; chasing the destination early makes
+        // every group track its row's moving window edge — the
+        // synchronized bundle zigzag
+        const last = end === ds.length
+        const x = pick(lo, hi, last ? dstCol : target, last ? target : dstCol)
         for (let j = k; j < end; j++) {
           if (ds[j].x !== x) moved = true
           ds[j].x = x
         }
-        target = dstCol
+        target = x
         k = end
       }
     }
@@ -322,7 +376,7 @@ function relaxChains(g: LGraph): void {
   }
 }
 
-function dedupe(pts: Pt[]): Pt[] {
+export function dedupe(pts: Pt[]): Pt[] {
   const out: Pt[] = []
   for (const p of pts) {
     const last = out[out.length - 1]
@@ -486,54 +540,129 @@ function routeChannel(segs: LEdge[], col: (p: LPort) => number, warnings: string
     members.set(second, members.get(victim) as LEdge[])
   }
 
-  // Dependencies: A → B means A takes an upper track than B.
-  const deps = new Map<Trunk, Map<Trunk, number>>()
-  const dep = (a: Trunk, b: Trunk, w: number): void => {
-    const m = deps.get(a) ?? new Map<Trunk, number>()
-    m.set(b, Math.max(m.get(b) ?? 0, w))
-    deps.set(a, m)
+  // Dependencies: A → B means A takes an upper track than B. The greedy
+  // arc-set order may break a MANDATORY arc when cycles force it — that
+  // is not a preference lost but two stubs merged into one line, so any
+  // violated mandatory pair gets one trunk split through a free column
+  // and the ordering runs again.
+  const splitThrough = (victim: Trunk): boolean => {
+    const mid = freeColumn(victim, used)
+    if (mid === null) return false
+    used.add(mid)
+    const first: Trunk = {
+      ins: victim.ins,
+      outs: [mid],
+      lo: Math.min(...victim.ins, mid),
+      hi: Math.max(...victim.ins, mid),
+      track: 0,
+    }
+    const second: Trunk = {
+      ins: [mid],
+      outs: victim.outs,
+      lo: Math.min(...victim.outs, mid),
+      hi: Math.max(...victim.outs, mid),
+      track: 0,
+    }
+    trunks.splice(trunks.indexOf(victim), 1, first, second)
+    // constraints on the victim carry to the half they were about: its
+    // lower half keeps "victim above x", its upper half keeps "x above
+    // victim" — a stale trunk in `forced` would poison later rounds
+    for (const pair of forced) {
+      if (pair[0] === victim) pair[0] = second
+      if (pair[1] === victim) pair[1] = first
+    }
+    forced.push([first, second])
+    const list = members.get(victim) as LEdge[]
+    for (const e of list) {
+      const path = paths.get(e) ?? []
+      const idx = path.findIndex((h) => h.trunk === victim)
+      if (idx >= 0)
+        path.splice(
+          idx,
+          1,
+          { trunk: first, exitCol: mid },
+          { trunk: second, exitCol: path[idx].exitCol },
+        )
+    }
+    members.set(first, list)
+    members.set(second, list)
+    return true
+  }
+  // two trunks carrying the same edge are one wire in sequence — the
+  // stub-merge rules below do not apply between them, `forced` governs
+  const sharesEdge = (a: Trunk, b: Trunk): boolean => {
+    const la = members.get(a) ?? []
+    const lb = members.get(b) ?? []
+    return la.some((e) => lb.includes(e))
   }
   const MANDATORY = 1 << 20
-  for (const [a, b] of forced) dep(a, b, MANDATORY)
   const within = (c: number, t: Trunk): boolean => c >= t.lo && c <= t.hi
-  for (let i = 0; i < trunks.length; i++) {
-    for (let j = i + 1; j < trunks.length; j++) {
-      const a = trunks[i]
-      const b = trunks[j]
-      if (a.hi < b.lo || b.hi < a.lo) continue
-      const critAB = critical(a, b)
-      const critBA = critical(b, a)
-      if (critAB && critBA) {
-        warnings.push('routing: two edges overlap in a channel')
-        continue
+  let order: Trunk[] = []
+  let rank = new Map<Trunk, number>()
+  let deps = new Map<Trunk, Map<Trunk, number>>()
+  for (let round = 0; round <= trunks.length + 4; round++) {
+    deps = new Map()
+    const dep = (a: Trunk, b: Trunk, w: number): void => {
+      const m = deps.get(a) ?? new Map<Trunk, number>()
+      m.set(b, Math.max(m.get(b) ?? 0, w))
+      deps.set(a, m)
+    }
+    for (const [a, b] of forced) dep(a, b, MANDATORY)
+    for (let i = 0; i < trunks.length; i++) {
+      for (let j = i + 1; j < trunks.length; j++) {
+        const a = trunks[i]
+        const b = trunks[j]
+        if (a.hi < b.lo || b.hi < a.lo) continue
+        if (sharesEdge(a, b)) continue
+        const critAB = critical(a, b)
+        const critBA = critical(b, a)
+        if (critAB && critBA) {
+          warnings.push('routing: two edges overlap in a channel')
+          continue
+        }
+        if (critAB) {
+          dep(b, a, MANDATORY)
+          continue
+        }
+        if (critBA) {
+          dep(a, b, MANDATORY)
+          continue
+        }
+        // crossings if a is above b: a's out-stubs through b's run, b's in-stubs through a's run
+        const cAB =
+          a.outs.filter((c) => within(c, b)).length + b.ins.filter((c) => within(c, a)).length
+        const cBA =
+          b.outs.filter((c) => within(c, a)).length + a.ins.filter((c) => within(c, b)).length
+        if (cAB < cBA) dep(a, b, cBA - cAB)
+        else if (cBA < cAB) dep(b, a, cAB - cBA)
+        else if (cAB > 0) {
+          dep(a, b, 0)
+          dep(b, a, 0)
+        }
       }
-      if (critAB) {
-        dep(b, a, MANDATORY)
-        continue
+    }
+    order = linearOrder(trunks, deps)
+    rank = new Map(order.map((t, i) => [t, i]))
+    let bad: [Trunk, Trunk] | null = null
+    for (const [a, m] of deps) {
+      for (const [b, w] of m) {
+        if (w >= MANDATORY && (rank.get(a) as number) > (rank.get(b) as number)) {
+          bad = [a, b]
+          break
+        }
       }
-      if (critBA) {
-        dep(a, b, MANDATORY)
-        continue
-      }
-      // crossings if a is above b: a's out-stubs through b's run, b's in-stubs through a's run
-      const cAB =
-        a.outs.filter((c) => within(c, b)).length + b.ins.filter((c) => within(c, a)).length
-      const cBA =
-        b.outs.filter((c) => within(c, a)).length + a.ins.filter((c) => within(c, b)).length
-      if (cAB < cBA) dep(a, b, cBA - cAB)
-      else if (cBA < cAB) dep(b, a, cAB - cBA)
-      else if (cAB > 0) {
-        dep(a, b, 0)
-        dep(b, a, 0)
-      }
+      if (bad !== null) break
+    }
+    if (bad === null) break
+    const [a, b] = bad
+    const victim = a.ins.length + a.outs.length <= b.ins.length + b.outs.length ? a : b
+    if (!splitThrough(victim)) {
+      warnings.push('routing: no free column to separate two edges; they overlap')
+      break
     }
   }
 
-  // Greedy feedback arc set over the trunks (sinks right, sources left,
-  // else max weighted out − in), then tracks = longest path over the
-  // dependencies that survive.
-  const order = linearOrder(trunks, deps)
-  const rank = new Map(order.map((t, i) => [t, i]))
+  // Tracks = longest path over the dependencies that survive the order.
   const indeg = new Map<Trunk, number>(trunks.map((t) => [t, 0]))
   const fwd = new Map<Trunk, Trunk[]>(trunks.map((t) => [t, []]))
   for (const [a, m] of deps) {
