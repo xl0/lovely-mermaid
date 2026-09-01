@@ -113,3 +113,14 @@ describe('engine pipeline', () => {
     expect(titles.filter((t) => !t.includes(' · ')).length).toBe(1 + PHASES.length)
   })
 })
+
+describe('er direction', () => {
+  test('erDiagram direction LR flows sideways through the engine', () => {
+    const lr = renderEngine('erDiagram\n direction LR\n A ||--o{ B : has\n B ||--o{ C : has')
+    const tb = renderEngine('erDiagram\n A ||--o{ B : has\n B ||--o{ C : has')
+    if (lr === null || tb === null) throw new Error('render failed')
+    // LR runs wider than tall, TB the other way around
+    expect(lr.plain.length).toBeLessThan(tb.plain.length)
+    expect(lr.plain[0].length).toBeGreaterThan(tb.plain[0].length)
+  })
+})

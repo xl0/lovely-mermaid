@@ -1,0 +1,214 @@
+erDiagram
+    direction LR
+    SESSION_HEADER {
+        string type
+        int version
+        uuid id PK
+        datetime timestamp
+        string cwd
+        string parentSession
+    }
+
+    SESSION_ENTRY {
+        string type
+        string id PK
+        string parentId FK
+        datetime timestamp
+    }
+
+    MESSAGE_ENTRY {
+        string entryId PK
+        string role
+        json message
+    }
+
+    MODEL_CHANGE_ENTRY {
+        string entryId PK
+        string provider
+        string modelId
+    }
+
+    THINKING_LEVEL_CHANGE_ENTRY {
+        string entryId PK
+        string thinkingLevel
+    }
+
+    COMPACTION_ENTRY {
+        string entryId PK
+        string summary
+        string firstKeptEntryId FK
+        int tokensBefore
+        json retainedTail
+        json usage
+        json details
+        boolean fromHook
+    }
+
+    BRANCH_SUMMARY_ENTRY {
+        string entryId PK
+        string fromId FK
+        string summary
+        json usage
+        json details
+        boolean fromHook
+    }
+
+    CUSTOM_ENTRY {
+        string entryId PK
+        string customType
+        json data
+    }
+
+    CUSTOM_MESSAGE_ENTRY {
+        string entryId PK
+        string customType
+        json content
+        boolean display
+        json details
+    }
+
+    LABEL_ENTRY {
+        string entryId PK
+        string targetId FK
+        string label
+    }
+
+    SESSION_INFO_ENTRY {
+        string entryId PK
+        string name
+    }
+
+    AGENT_MESSAGE {
+        string role
+        datetime timestamp
+        json content
+    }
+
+    USER_MESSAGE {
+        string role
+        json content
+        datetime timestamp
+    }
+
+    ASSISTANT_MESSAGE {
+        string role
+        string api
+        string provider
+        string model
+        string stopReason
+        string errorMessage
+        json usage
+        datetime timestamp
+    }
+
+    TOOL_RESULT_MESSAGE {
+        string role
+        string toolCallId FK
+        string toolName
+        json content
+        json details
+        json usage
+        boolean isError
+        datetime timestamp
+    }
+
+    BASH_EXECUTION_MESSAGE {
+        string role
+        string command
+        string output
+        int exitCode
+        boolean cancelled
+        boolean truncated
+        string fullOutputPath
+        boolean excludeFromContext
+    }
+
+    CONTENT_BLOCK {
+        string type
+        int contentIndex
+    }
+
+    TEXT_CONTENT {
+        string type
+        string text
+    }
+
+    IMAGE_CONTENT {
+        string type
+        string mimeType
+        string data
+    }
+
+    THINKING_CONTENT {
+        string type
+        string thinking
+    }
+
+    TOOL_CALL {
+        string type
+        string id PK
+        string name
+        json arguments
+    }
+
+    USAGE {
+        int input
+        int output
+        int cacheRead
+        int cacheWrite
+        int totalTokens
+        json cost
+    }
+
+    COMPACTION_SUMMARY_MESSAGE {
+        string role
+        string summary
+        int tokensBefore
+        datetime timestamp
+    }
+
+    BRANCH_SUMMARY_MESSAGE {
+        string role
+        string summary
+        string fromId
+        datetime timestamp
+    }
+
+    SESSION_HEADER ||--o{ SESSION_ENTRY : contains
+    SESSION_ENTRY o|--o{ SESSION_ENTRY : parent_of
+    SESSION_ENTRY ||--o| MESSAGE_ENTRY : may_be
+    SESSION_ENTRY ||--o| MODEL_CHANGE_ENTRY : may_be
+    SESSION_ENTRY ||--o| THINKING_LEVEL_CHANGE_ENTRY : may_be
+    SESSION_ENTRY ||--o| COMPACTION_ENTRY : may_be
+    SESSION_ENTRY ||--o| BRANCH_SUMMARY_ENTRY : may_be
+    SESSION_ENTRY ||--o| CUSTOM_ENTRY : may_be
+    SESSION_ENTRY ||--o| CUSTOM_MESSAGE_ENTRY : may_be
+    SESSION_ENTRY ||--o| LABEL_ENTRY : may_be
+    SESSION_ENTRY ||--o| SESSION_INFO_ENTRY : may_be
+
+    MESSAGE_ENTRY ||--|| AGENT_MESSAGE : wraps
+    AGENT_MESSAGE ||--o| USER_MESSAGE : variant
+    AGENT_MESSAGE ||--o| ASSISTANT_MESSAGE : variant
+    AGENT_MESSAGE ||--o| TOOL_RESULT_MESSAGE : variant
+    AGENT_MESSAGE ||--o| BASH_EXECUTION_MESSAGE : variant
+    AGENT_MESSAGE ||--o| COMPACTION_SUMMARY_MESSAGE : context_variant
+    AGENT_MESSAGE ||--o| BRANCH_SUMMARY_MESSAGE : context_variant
+
+    USER_MESSAGE ||--o{ CONTENT_BLOCK : contains
+    ASSISTANT_MESSAGE ||--o{ CONTENT_BLOCK : contains
+    TOOL_RESULT_MESSAGE ||--o{ CONTENT_BLOCK : contains
+    CUSTOM_MESSAGE_ENTRY ||--o{ CONTENT_BLOCK : contains
+    CONTENT_BLOCK ||--o| TEXT_CONTENT : variant
+    CONTENT_BLOCK ||--o| IMAGE_CONTENT : variant
+    CONTENT_BLOCK ||--o| THINKING_CONTENT : variant
+    CONTENT_BLOCK ||--o| TOOL_CALL : variant
+
+    ASSISTANT_MESSAGE ||--|| USAGE : reports
+    TOOL_RESULT_MESSAGE ||--o| USAGE : may_report
+    COMPACTION_ENTRY ||--o| USAGE : summarization_cost
+    BRANCH_SUMMARY_ENTRY ||--o| USAGE : summarization_cost
+    TOOL_CALL ||--o| TOOL_RESULT_MESSAGE : answered_by
+    COMPACTION_ENTRY ||--o{ AGENT_MESSAGE : retains_tail
+    COMPACTION_ENTRY }o--o| SESSION_ENTRY : first_kept
+    BRANCH_SUMMARY_ENTRY }o--|| SESSION_ENTRY : summarizes_from
+    LABEL_ENTRY }o--|| SESSION_ENTRY : labels

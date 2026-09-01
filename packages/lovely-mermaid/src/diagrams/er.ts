@@ -6,7 +6,7 @@
  * Entities use `Node.sections` as `[title, attrs]`.
  */
 
-import { Graph, type LineKind, MAX_MEMBERS, type Node } from '../graph.ts'
+import { Graph, type LineKind, MAX_MEMBERS, type Node, parseDir } from '../graph.ts'
 import { cleanLabel, decodeHtmlEntities, displayGenerics } from '../labels.ts'
 import { layoutClass } from '../layout.ts'
 import type { Diagram } from '../registry.ts'
@@ -37,6 +37,12 @@ export function parseEr(src: string): Graph | null {
     if (curEntity !== null) {
       if (st === '}') curEntity = null
       else if (curEntity !== 'skip') pushErAttribute(graph.nodes[curEntity], st)
+      continue
+    }
+
+    if (words(st)[0] === 'direction') {
+      // mermaid 10.5+: `direction TB|BT|LR|RL` at the top level
+      graph.dir = parseDir(words(st)[1] ?? '')
       continue
     }
 
