@@ -1,3 +1,5 @@
+
+
 # lovely-mermaid
 
 Render Mermaid diagrams as Unicode box-drawing art, for terminals.
@@ -182,7 +184,7 @@ art.styled.flat().find((s) => s.text.includes('DB'))?.classes  // ['hot']
 node's cells, `stroke` colours its border, `color` its text,
 `font-weight:bold` bolds — as truecolor SGR, with a readable black/white
 foreground picked when a fill declares no colour. Consumers with their own
-styling model use the exported `resolveClassStyle`/`contrastOn` against the
+styling model use the exported `resolveClassStyle`/`classSgr`/`contrastOn` against the
 classed spans instead.
 
 ### Links
