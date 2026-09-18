@@ -11,10 +11,38 @@ function flushStatement(cur: string, out: string[]): string {
   return ''
 }
 
+/** Longest entity body the splitter will keep intact, e.g. `&thinsp;`. */
+const ENTITY_MAX = 10
+
+/**
+ * Length of the HTML entity starting at `chars[i]` (`&` through `;`), or 0.
+ * Recognises `&name;`, `&#123;` and `&#x1F;`; anything else is a literal `&`.
+ */
+function entityLength(chars: string[], i: number): number {
+  if (chars[i] !== '&') return 0
+  let j = i + 1
+  const hi = Math.min(j + ENTITY_MAX, chars.length)
+  if (chars[j] === '#') {
+    j++
+    const hex = chars[j] === 'x' || chars[j] === 'X'
+    if (hex) j++
+    const start = j
+    while (j < hi && (hex ? /[0-9a-fA-F]/ : /[0-9]/).test(chars[j])) j++
+    if (j === start) return 0
+  } else {
+    const start = j
+    while (j < hi && /[A-Za-z0-9]/.test(chars[j])) j++
+    if (j === start) return 0
+  }
+  return chars[j] === ';' ? j - i + 1 : 0
+}
+
 /**
  * Split one source line into statements on `;`, stopping at a `%%` comment.
  *
- * Quoted spans are opaque, so a label may contain `;` and `%%`.
+ * Quoted spans are opaque, so a label may contain `;` and `%%`. An HTML
+ * entity such as `&quot;` or `&#40;` is also opaque: its `;` terminates the
+ * entity, not the statement, so `A[a &amp; b]` stays one node.
  */
 export function splitStatements(line: string, out: string[]): void {
   const chars = [...line]
@@ -30,6 +58,10 @@ export function splitStatements(line: string, out: string[]): void {
       cur += c
     } else if (c === '%' && chars[i + 1] === '%') {
       break
+    } else if (c === '&') {
+      const len = entityLength(chars, i)
+      cur += chars.slice(i, i + Math.max(1, len)).join('')
+      i += Math.max(1, len) - 1
     } else if (c === ';') {
       cur = flushStatement(cur, out)
     } else {

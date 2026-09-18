@@ -93,22 +93,3 @@ graph TD
 ```warnings
 dropped, does not start with a node: "-->"
 ```
-
-A known limit: `;` inside an unquoted entity splits the statement
-mid-entity, so the label is lost with warnings.
-
-```mermaid
-graph TD
-  A -->|go&#160;| B
-```
-
-```text
- ┌───┐
- │ A │
- └───┘
-```
-
-```warnings
-dropped, link has no target: "A -->|go&#160"
-dropped, does not start with a node: "| B"
-```

@@ -55,3 +55,17 @@ graph TD %% main flow
         │ B │
         └───┘
 ```
+
+An HTML entity's `;` ends the entity, not the statement, so an unquoted
+label may contain `&quot;`, `&amp;` or a numeric entity.
+
+```mermaid
+flowchart LR
+  A[&quot;Please log in&quot;] --> B[a &amp; b]; B --> C[x&#40;y&#41;]
+```
+
+```text
+┌─────────────────┐    ┌───────┐    ┌──────┐
+│ "Please log in" ├───▶│ a & b ├───▶│ x(y) │
+└─────────────────┘    └───────┘    └──────┘
+```
