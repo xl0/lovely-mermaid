@@ -26,7 +26,7 @@ flowchart RL
 
 ```text
 ╔═════╗    ┌───┐
-║ go? ║◄───┤ B │
+║ go? ║◀───┤ B │
 ╚═════╝    └───┘
 ```
 
@@ -63,7 +63,7 @@ flowchart TD
 
 ```text
      ┌───┐
-     │ A │◄────┐
+     │ A │◀────┐
      └─┬─┘     │
    ┌───┴───┐   │
    ▼       ▼   │
@@ -111,12 +111,12 @@ the glyph remap applies to structure, not authored cells.
 
 ```mermaid
 flowchart RL
-  A[go ◄ left] -->|l ◄ r| B
+  A[go ◀ left] -->|l ◄ r| B
 ```
 
 ```text
 ┌───┐  l ◄ r ┌───────────┐
-│ B │◄───────┤ go ◄ left │
+│ B │◀───────┤ go ◀ left │
 └───┘        └───────────┘
 ```
 

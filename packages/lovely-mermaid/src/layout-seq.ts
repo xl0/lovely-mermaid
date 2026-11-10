@@ -206,7 +206,7 @@ function drawMessage(
     canvas.set(x + 2, r, lineCh, 'edge')
     canvas.set(x + 3, r, '╮', 'edge')
     canvas.set(x + 3, r + 1, '│', 'edge')
-    canvas.set(x + 1, r + 2, item.head === 'cross' ? '×' : '◄', 'edge')
+    canvas.set(x + 1, r + 2, item.head === 'cross' ? '×' : '◀', 'edge')
     canvas.set(x + 2, r + 2, lineCh, 'edge')
     canvas.set(x + 3, r + 2, '╯', 'edge')
     if (item.text !== null) drawTextOverEdges(canvas, item.text, x + 5, r + 1, 'text')
@@ -223,7 +223,7 @@ function drawMessage(
 
   canvas.junction(x0, arrowRow, rightward ? R : L)
   for (let x = lo + 1; x < hi; x++) canvas.set(x, arrowRow, lineCh, 'edge')
-  const headCh = item.head === 'cross' ? '×' : rightward ? '▶' : '◄'
+  const headCh = item.head === 'cross' ? '×' : rightward ? '▶' : '◀'
   canvas.set(rightward ? x1 - 1 : x1 + 1, arrowRow, headCh, 'edge')
 
   if (item.text !== null) {

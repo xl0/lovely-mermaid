@@ -61,6 +61,6 @@ flowchart RL
 
 ```text
 ┌───────┐    ┌────────┐    ┌───────┐
-│ third │◄───┤ second │◄───┤ first │
+│ third │◀───┤ second │◀───┤ first │
 └───────┘    └────────┘    └───────┘
 ```
