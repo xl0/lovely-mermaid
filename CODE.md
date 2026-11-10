@@ -224,6 +224,9 @@ through sibling boxes. Track packing lets edges sharing an endpoint reuse one
 row, which is why a merge draws a single arrowhead. Parallel edges (same
 from/to) ride the same cells; their labels join (`one / two`) before sizing.
 
+Horizontal arrowheads use the mirrored triangle pair `◀` / `▶` in graph
+and sequence layouts; hollow heads use `◁` / `▷`.
+
 `BT`/`RL` reuse the `TD`/`LR` layout and flip the finished canvas, so text is
 never mirrored — `flipHorizontal` reverses each text run back to reading
 order, glyph remapping skips text/edgeLabel/title cells, and under `dir: up`

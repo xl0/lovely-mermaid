@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Horizontal arrowheads use matching triangles (`◀` / `▶`) in graph and sequence diagrams, including mirrored layouts, instead of mixing a pointer with a triangle (#8).
 - An adjacent-rank back-edge label no longer loses its last character when it sets the canvas width (`retry` rendered `retr` inside a composite region).
 
 ## [0.3.3] - 2026-08-15

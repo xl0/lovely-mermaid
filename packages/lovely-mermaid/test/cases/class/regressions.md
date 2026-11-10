@@ -99,3 +99,30 @@ classDiagram
 │ +eat()   │
 └──────────┘
 ```
+
+Horizontal inheritance heads stay hollow when using the matching solid
+arrowhead pair (#8), including after an RL flip.
+
+```mermaid
+classDiagram
+  direction LR
+  Animal <|-- Duck
+```
+
+```text
+┌────────┐    ┌──────┐
+│ Animal ◁────│ Duck │
+└────────┘    └──────┘
+```
+
+```mermaid
+classDiagram
+  direction RL
+  Animal <|-- Duck
+```
+
+```text
+┌──────┐    ┌────────┐
+│ Duck │────▷ Animal │
+└──────┘    └────────┘
+```

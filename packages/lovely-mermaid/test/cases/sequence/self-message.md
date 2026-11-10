@@ -12,7 +12,7 @@ sequenceDiagram
   │
   ├──╮
   │  │ think
-  │◄─╯
+  │◀─╯
   │
 ┌─┴─┐
 │ A │

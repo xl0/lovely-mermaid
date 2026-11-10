@@ -1297,7 +1297,7 @@ function headGlyph(head: Head, arrow: string): string {
     case 'diamondOpen':
       return '◇'
     case 'triangle':
-      return { '▼': '▽', '▲': '△', '◄': '◁', '▶': '▷' }[arrow] ?? arrow
+      return { '▼': '▽', '▲': '△', '◀': '◁', '▶': '▷' }[arrow] ?? arrow
     default:
       return arrow
   }
@@ -1483,14 +1483,14 @@ function routeBack(canvas: Canvas, from: Placed, to: Placed, edge: Edge, laneX: 
 
   canvas.junction(sx, sy, R)
   canvas.segH(sy, sx, laneX)
-  if (edge.headFrom !== 'none') canvas.set(sx, sy, headGlyph(edge.headFrom, '◄'), 'edge')
+  if (edge.headFrom !== 'none') canvas.set(sx, sy, headGlyph(edge.headFrom, '◀'), 'edge')
 
   const tx = to.x + to.w - 1
   const tyc = to.cy
   canvas.segV(laneX, sy, tyc)
   canvas.segH(tyc, tx + 1, laneX)
   if (edge.headTo === 'none') canvas.addBits(tx + 1, tyc, R)
-  else canvas.set(tx + 1, tyc, headGlyph(edge.headTo, '◄'), 'edge')
+  else canvas.set(tx + 1, tyc, headGlyph(edge.headTo, '◀'), 'edge')
   if (backText !== null) {
     placeLabel(canvas, backText, sat(tyc, 1), sat(laneX, stringWidth(backText) + 1))
   }
@@ -1514,7 +1514,7 @@ function routeForwardLr(canvas: Canvas, from: Placed, to: Placed, edge: Edge, bu
 
   if (edge.headTo === 'none') canvas.addBits(headCol, ly, R)
   else canvas.set(headCol, ly, headGlyph(edge.headTo, '▶'), 'edge')
-  if (edge.headFrom !== 'none') canvas.set(rx, ry, headGlyph(edge.headFrom, '◄'), 'edge')
+  if (edge.headFrom !== 'none') canvas.set(rx, ry, headGlyph(edge.headFrom, '◀'), 'edge')
 
   // The verb keeps its usual spot above the line; cardinalities hug their
   // own ends on the rows above the departure and arrival cells.
@@ -1544,7 +1544,7 @@ function routeSkipLr(canvas: Canvas, from: Placed, to: Placed, edge: Edge, bus: 
 
   if (edge.headTo === 'none') canvas.addBits(headCol, ty, R)
   else canvas.set(headCol, ty, headGlyph(edge.headTo, '▶'), 'edge')
-  if (edge.headFrom !== 'none') canvas.set(rx, ry, headGlyph(edge.headFrom, '◄'), 'edge')
+  if (edge.headFrom !== 'none') canvas.set(rx, ry, headGlyph(edge.headFrom, '◀'), 'edge')
 
   // Label after the bus jog, where forward labels sit — the gap before the
   // target belongs to the arrivals that end there.
